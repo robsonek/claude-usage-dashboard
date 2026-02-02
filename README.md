@@ -120,8 +120,14 @@ sudo systemctl start cron
 Set up cron job to collect data every 5 minutes:
 
 ```bash
-echo "PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin
-*/5 * * * * cd /home/YOUR_USERNAME/claude-dashboard && ./collect_history.sh >> /home/YOUR_USERNAME/claude-dashboard/cron.log 2>&1" | crontab -
+crontab -e
+```
+
+Add the following lines at the end:
+
+```cron
+PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin
+*/5 * * * * cd /home/YOUR_USERNAME/claude-dashboard && ./collect_history.sh >> /home/YOUR_USERNAME/claude-dashboard/cron.log 2>&1
 ```
 
 Verify cron is set:
