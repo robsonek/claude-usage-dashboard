@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Usage Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        // Apply theme immediately to prevent flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+</head>
+<body>
+    <div class="dashboard">
+        <header>
+            <h1>🤖 Claude Usage Dashboard</h1>
+            <div class="header-actions">
+                <button id="theme-toggle" class="theme-toggle">🌙</button>
+                <button id="refresh-btn" class="btn-refresh">🔄 Refresh</button>
+                <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
+            </div>
+        </header>
+
+        <!-- Current status cards -->
+        <section class="current-status">
+            <div class="status-card weekly">
+                <h3>Weekly Limit</h3>
+                <div class="progress-container">
+                    <div class="progress-bar" id="weekly-progress"></div>
+                </div>
+                <div class="status-details">
+                    <span class="remaining" id="weekly-remaining">--</span>
+                    <span class="reset-time" id="weekly-reset">Reset: --</span>
+                </div>
+            </div>
+
+            <div class="status-card daily">
+                <h3>Session (5h)</h3>
+                <div class="progress-container">
+                    <div class="progress-bar" id="session-progress"></div>
+                </div>
+                <div class="status-details">
+                    <span class="remaining" id="session-remaining">--</span>
+                    <span class="reset-time" id="session-reset">Reset: --</span>
+                </div>
+            </div>
+
+            <div class="status-card model">
+                <h3>Model Specific (Sonnet)</h3>
+                <div class="progress-container">
+                    <div class="progress-bar" id="model-progress"></div>
+                </div>
+                <div class="status-details">
+                    <span class="remaining" id="model-remaining">--</span>
+                    <span class="reset-time" id="model-reset">Reset: --</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Prediction panel -->
+        <section class="prediction-panel">
+            <h2>📊 Prediction</h2>
+            <div class="predictions">
+                <div class="prediction-card" id="prediction-weekly">
+                    <h4>Weekly</h4>
+                    <div class="prediction-content">Loading...</div>
+                </div>
+                <div class="prediction-card" id="prediction-session">
+                    <h4>Session</h4>
+                    <div class="prediction-content">Loading...</div>
+                </div>
+                <div class="prediction-card" id="prediction-model">
+                    <h4>Model Specific</h4>
+                    <div class="prediction-content">Loading...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Charts -->
+        <section class="charts">
+            <div class="chart-controls">
+                <span>Time range:</span>
+                <button class="time-btn" data-hours="1">1h</button>
+                <button class="time-btn" data-hours="6">6h</button>
+                <button class="time-btn active" data-hours="24">24h</button>
+                <button class="time-btn" data-hours="72">3d</button>
+                <button class="time-btn" data-hours="168">7d</button>
+            </div>
+
+            <div class="chart-container">
+                <h2>Weekly Usage (% used)</h2>
+                <canvas id="chart-weekly"></canvas>
+            </div>
+
+            <div class="chart-container">
+                <h2>Session Usage (% used)</h2>
+                <canvas id="chart-session"></canvas>
+            </div>
+
+            <div class="chart-container">
+                <h2>Model Specific Usage (% used)</h2>
+                <canvas id="chart-model"></canvas>
+            </div>
+        </section>
+
+        <footer>
+            <p>Last update: <span id="last-update">--</span></p>
+        </footer>
+    </div>
+
+    <script>
+        // Period metadata for charts (for calculating target value in tooltips)
+        const chartPeriodData = {
+            weekly: { resetAt: null, periodHours: 168 },
+            session: { resetAt: null, periodHours: 5 },
+            model: { resetAt: null, periodHours: 168 }
+        };
+
+        // Function calculating target value for a given moment
+        function getIdealValueAt(timestamp, resetAt, periodHours) {
+            if (!resetAt) return null;
+            const resetTime = new Date(resetAt);
+            const periodMs = periodHours * 60 * 60 * 1000;
+            const periodStart = new Date(resetTime.getTime() - periodMs);
+            const timeMs = timestamp instanceof Date ? timestamp.getTime() : timestamp;
+            const ideal = ((timeMs - periodStart.getTime()) / periodMs) * 100;
+            return Math.max(0, Math.min(ideal, 100));
+        }
+
+        // Chart configuration
+        const chartConfig = {
+            type: 'line',
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            displayFormats: {
+                                minute: 'HH:mm',
+                                hour: 'HH:mm',
+                                day: 'dd.MM HH:mm'
+                            },
+                            tooltipFormat: 'dd.MM.yyyy HH:mm'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Time'
+                        }
+                    },
+                    y: {
+                        min: 0,
+                        max: 100,
+                        title: {
+                            display: true,
+                            text: '% used'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    },
+                    tooltip: {
+                        enabled: true,
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleColor: '#fff',
+                        bodyColor: '#fff',
+                        borderColor: 'rgba(255, 255, 255, 0.2)',
+                        borderWidth: 1,
+                        padding: 12,
+                        displayColors: true,
+                        itemSort: function(a, b) {
+                            return b.parsed.y - a.parsed.y;
+                        },
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.dataset.label || '';
+                                if (context.parsed.y !== null) {
+                                    return label + ': ' + context.parsed.y.toFixed(1) + '%';
+                                }
+                                return null;
+                            }
+                        }
+                    }
+                },
+                elements: {
+                    point: {
+                        radius: 3,
+                        hoverRadius: 6,
+                        hitRadius: 10
+                    },
+                    line: {
+                        tension: 0.1
+                    }
+                }
+            }
+        };
+
+        let chartWeekly, chartSession, chartModel;
+
+        // Initialize charts
+        function initCharts() {
+            const ctxWeekly = document.getElementById('chart-weekly').getContext('2d');
+            const ctxSession = document.getElementById('chart-session').getContext('2d');
+            const ctxModel = document.getElementById('chart-model').getContext('2d');
+
+            chartWeekly = new Chart(ctxWeekly, {
+                ...chartConfig,
+                data: {
+                    datasets: [
+                        { label: 'Usage', borderColor: '#3498db', backgroundColor: 'rgba(52, 152, 219, 0.1)', fill: true, data: [] },
+                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [] }
+                    ]
+                }
+            });
+
+            chartSession = new Chart(ctxSession, {
+                ...chartConfig,
+                data: {
+                    datasets: [
+                        { label: 'Usage', borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', fill: true, data: [] },
+                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [] }
+                    ]
+                }
+            });
+
+            chartModel = new Chart(ctxModel, {
+                ...chartConfig,
+                data: {
+                    datasets: [
+                        { label: 'Usage', borderColor: '#9b59b6', backgroundColor: 'rgba(155, 89, 182, 0.1)', fill: true, data: [] },
+                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [] }
+                    ]
+                }
+            });
+        }
+
+        // Update current status
+        async function updateCurrentStatus() {
+            try {
+                const response = await fetch('/api/current');
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Error fetching data:', data.error);
+                    return;
+                }
+
+                const limits = data.limits || {};
+
+                // Weekly
+                if (limits.weekly) {
+                    const used = 100 - (limits.weekly.percent_remaining || 0);
+                    document.getElementById('weekly-progress').style.width = used + '%';
+                    document.getElementById('weekly-progress').className = 'progress-bar ' + getProgressClass(used);
+                    document.getElementById('weekly-remaining').textContent = `${limits.weekly.percent_remaining?.toFixed(1) || '--'}% remaining`;
+                    document.getElementById('weekly-reset').textContent = `Reset: ${formatDate(limits.weekly.resets_at)}`;
+                }
+
+                // Daily
+                if (limits.session) {
+                    const used = 100 - (limits.session.percent_remaining || 0);
+                    document.getElementById('session-progress').style.width = used + '%';
+                    document.getElementById('session-progress').className = 'progress-bar ' + getProgressClass(used);
+                    document.getElementById('session-remaining').textContent = `${limits.session.percent_remaining?.toFixed(1) || '--'}% remaining`;
+                    document.getElementById('session-reset').textContent = `Reset: ${formatDate(limits.session.resets_at)}`;
+                }
+
+                // Model specific
+                if (limits.model_specific) {
+                    const used = 100 - (limits.model_specific.percent_remaining || 0);
+                    document.getElementById('model-progress').style.width = used + '%';
+                    document.getElementById('model-progress').className = 'progress-bar ' + getProgressClass(used);
+                    document.getElementById('model-remaining').textContent = `${limits.model_specific.percent_remaining?.toFixed(1) || '--'}% remaining`;
+                    document.getElementById('model-reset').textContent = `Reset: ${formatDate(limits.model_specific.resets_at)}`;
+                }
+
+                document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        // Current time range
+        let currentTimeRange = 24;
+
+        // Update charts
+        async function updateCharts(hours = null) {
+            if (hours !== null) {
+                currentTimeRange = hours;
+            }
+            try {
+                const [historyRes, currentRes] = await Promise.all([
+                    fetch(`/api/history?hours=${currentTimeRange}`),
+                    fetch('/api/current')
+                ]);
+                const history = await historyRes.json();
+                const current = await currentRes.json();
+
+                if (!Array.isArray(history) || history.length === 0) {
+                    console.log('No historical data');
+                    return;
+                }
+
+                const weeklyData = [];
+                const sessionData = [];
+                const modelData = [];
+
+                history.forEach(record => {
+                    const timestamp = new Date(record.timestamp);
+                    const limits = record.limits || {};
+
+                    if (limits.weekly) {
+                        weeklyData.push({
+                            x: timestamp,
+                            y: 100 - (limits.weekly.percent_remaining || 0),
+                            resetAt: limits.weekly.resets_at
+                        });
+                    }
+                    if (limits.session) {
+                        sessionData.push({
+                            x: timestamp,
+                            y: 100 - (limits.session.percent_remaining || 0),
+                            resetAt: limits.session.resets_at
+                        });
+                    }
+                    if (limits.model_specific) {
+                        modelData.push({
+                            x: timestamp,
+                            y: 100 - (limits.model_specific.percent_remaining || 0),
+                            resetAt: limits.model_specific.resets_at
+                        });
+                    }
+                });
+
+                // Get reset times from current data
+                const limits = current.limits || {};
+                const weeklyReset = limits.weekly?.resets_at;
+                const sessionReset = limits.session?.resets_at;
+                const modelReset = limits.model_specific?.resets_at;
+
+                // Save period data for tooltips
+                chartPeriodData.weekly.resetAt = weeklyReset;
+                chartPeriodData.session.resetAt = sessionReset;
+                chartPeriodData.model.resetAt = modelReset;
+
+                // Update chart data
+                // Weekly: 168h (7 days), Session: 5h, Model: 168h (week)
+                chartWeekly.data.datasets[0].data = weeklyData;
+                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168);
+                chartWeekly.update();
+
+                chartSession.data.datasets[0].data = sessionData;
+                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5);
+                chartSession.update();
+
+                chartModel.data.datasets[0].data = modelData;
+                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168);
+                chartModel.update();
+            } catch (error) {
+                console.error('Error loading history:', error);
+            }
+        }
+
+        // Calculate trend line
+        function calculateTrendLine(data) {
+            if (data.length < 2) return [];
+
+            const n = data.length;
+            const times = data.map(d => d.x.getTime());
+            const values = data.map(d => d.y);
+
+            const t0 = times[0];
+            const timesNorm = times.map(t => t - t0);
+
+            const sumT = timesNorm.reduce((a, b) => a + b, 0);
+            const sumV = values.reduce((a, b) => a + b, 0);
+            const sumTV = timesNorm.reduce((acc, t, i) => acc + t * values[i], 0);
+            const sumT2 = timesNorm.reduce((acc, t) => acc + t * t, 0);
+
+            const denom = n * sumT2 - sumT * sumT;
+            if (Math.abs(denom) < 1e-10) return [];
+
+            const a = (n * sumTV - sumT * sumV) / denom;
+            const b = (sumV - a * sumT) / n;
+
+            // Return only start and end points for trend line
+            return [
+                { x: data[0].x, y: b },
+                { x: data[n - 1].x, y: a * timesNorm[n - 1] + b }
+            ];
+        }
+
+        // Calculate target usage line (even consumption to 100% at reset)
+        // periodHours: period duration in hours (168 for weekly, 5 for session, etc.)
+        // Each point has its own resetAt to handle period transitions correctly
+        function calculateIdealLine(data, periodHours) {
+            if (data.length < 1) return [];
+
+            const periodMs = periodHours * 60 * 60 * 1000;
+
+            // Generate target point for each timestamp using its own resetAt
+            return data.map(point => {
+                if (!point.resetAt) return { x: point.x, y: null };
+
+                const resetTime = new Date(point.resetAt);
+                const periodStart = new Date(resetTime.getTime() - periodMs);
+                const ideal = ((point.x.getTime() - periodStart.getTime()) / periodMs) * 100;
+                return { x: point.x, y: Math.max(0, Math.min(ideal, 100)) };
+            });
+        }
+
+        // Update predictions
+        async function updatePredictions() {
+            try {
+                const response = await fetch('/api/prediction');
+                const predictions = await response.json();
+
+                updatePredictionCard('prediction-weekly', predictions.weekly);
+                updatePredictionCard('prediction-session', predictions.session);
+                updatePredictionCard('prediction-model', predictions.model_specific);
+            } catch (error) {
+                console.error('Error loading predictions:', error);
+            }
+        }
+
+        function updatePredictionCard(elementId, prediction) {
+            const card = document.getElementById(elementId);
+            const content = card.querySelector('.prediction-content');
+
+            if (!prediction) {
+                content.innerHTML = '<span class="no-data">Insufficient data</span>';
+                return;
+            }
+
+            // Handle stale data (after reset)
+            if (prediction.stale_data) {
+                content.innerHTML = `
+                    <div class="prediction-status pending">
+                        🔄 Reset occurred, waiting for new data...
+                    </div>
+                    <div class="prediction-details">
+                        <p>Current: <strong>${prediction.current_usage}%</strong></p>
+                        <p>Predicted at reset: <strong>${prediction.current_usage}%</strong></p>
+                        <p>Trend: <strong>0%/h</strong></p>
+                        <p>To 100%: <strong>∞</strong></p>
+                        <p>To reset: <strong>${formatHours(prediction.time_to_reset_hours)}</strong></p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Handle low confidence (not enough time span)
+            if (prediction.low_confidence) {
+                content.innerHTML = `
+                    <div class="prediction-status pending">
+                        📊 Collecting data...
+                    </div>
+                    <div class="prediction-details">
+                        <p>Current: <strong>${prediction.current_usage}%</strong></p>
+                        <p>Predicted at reset: <strong>${prediction.current_usage}%</strong></p>
+                        <p>Trend: <strong>${prediction.trend_per_hour !== null ? prediction.trend_per_hour + '%/h' : '0%/h'}</strong></p>
+                        <p>To 100%: <strong>∞</strong></p>
+                        <p>To reset: <strong>${formatHours(prediction.time_to_reset_hours)}</strong></p>
+                    </div>
+                `;
+                return;
+            }
+
+            const statusClass = prediction.will_exceed ? 'warning' : 'ok';
+            const statusIcon = prediction.will_exceed ? '⚠️' : '✅';
+            const statusText = prediction.will_exceed ? 'Will exceed limit!' : 'On track';
+
+            content.innerHTML = `
+                <div class="prediction-status ${statusClass}">
+                    ${statusIcon} ${statusText}
+                </div>
+                <div class="prediction-details">
+                    <p>Current: <strong>${prediction.current_usage}%</strong></p>
+                    <p>Predicted at reset: <strong>${prediction.predicted_at_reset}%</strong></p>
+                    <p>Trend: <strong>${prediction.trend_per_hour}%/h</strong></p>
+                    <p>To 100%: <strong>${prediction.hours_to_100 ? formatHours(prediction.hours_to_100) : '∞'}</strong></p>
+                    <p>To reset: <strong>${formatHours(prediction.time_to_reset_hours)}</strong></p>
+                </div>
+            `;
+        }
+
+        // Helper functions
+        function formatHours(hours) {
+            if (hours === null || hours === undefined) return '--';
+            const totalSeconds = Math.round(hours * 3600);
+
+            // Handle negative or zero time (reset happened)
+            if (totalSeconds <= 0) {
+                return 'Reset!';
+            }
+
+            const days = Math.floor(totalSeconds / 86400);
+            const h = Math.floor((totalSeconds % 86400) / 3600);
+            const m = Math.floor((totalSeconds % 3600) / 60);
+            const s = totalSeconds % 60;
+
+            if (days > 0) {
+                return h > 0 ? `${days}d ${h}h` : `${days}d`;
+            } else if (h > 0) {
+                return m > 0 ? `${h}h ${m}m` : `${h}h`;
+            } else if (m > 0) {
+                return s > 0 ? `${m}m ${s}s` : `${m}m`;
+            } else {
+                return `${s}s`;
+            }
+        }
+
+        function getProgressClass(percent) {
+            if (percent >= 90) return 'critical';
+            if (percent >= 70) return 'warning';
+            return 'ok';
+        }
+
+        function formatDate(isoString) {
+            if (!isoString) return '--';
+            const date = new Date(isoString);
+            return date.toLocaleString(undefined, {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        // Theme toggle
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            updateThemeIcon(savedTheme);
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+        }
+
+        function updateThemeIcon(theme) {
+            const btn = document.getElementById('theme-toggle');
+            btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initTheme();
+            initCharts();
+            updateCurrentStatus();
+            updateCharts();
+            updatePredictions();
+
+            // Auto refresh every 5 minutes
+            setInterval(() => {
+                updateCurrentStatus();
+                updateCharts();
+                updatePredictions();
+            }, 5 * 60 * 1000);
+
+            // Refresh button
+            document.getElementById('refresh-btn').addEventListener('click', () => {
+                updateCurrentStatus();
+                updateCharts();
+                updatePredictions();
+            });
+
+            // Theme toggle button
+            document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+            // Time range buttons
+            document.querySelectorAll('.time-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    updateCharts(parseInt(btn.dataset.hours));
+                });
+            });
+        });
+    </script>
+</body>
+</html>
