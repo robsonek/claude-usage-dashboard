@@ -265,7 +265,7 @@
                     const used = 100 - (limits.weekly.percent_remaining || 0);
                     document.getElementById('weekly-progress').style.width = used + '%';
                     document.getElementById('weekly-progress').className = 'progress-bar ' + getProgressClass(used);
-                    document.getElementById('weekly-remaining').textContent = `${limits.weekly.percent_remaining?.toFixed(1) || '--'}% remaining`;
+                    document.getElementById('weekly-remaining').textContent = `${used.toFixed(1)}% used`;
                     document.getElementById('weekly-reset').textContent = `Reset: ${formatDate(limits.weekly.resets_at)}`;
                 }
 
@@ -274,7 +274,7 @@
                     const used = 100 - (limits.session.percent_remaining || 0);
                     document.getElementById('session-progress').style.width = used + '%';
                     document.getElementById('session-progress').className = 'progress-bar ' + getProgressClass(used);
-                    document.getElementById('session-remaining').textContent = `${limits.session.percent_remaining?.toFixed(1) || '--'}% remaining`;
+                    document.getElementById('session-remaining').textContent = `${used.toFixed(1)}% used`;
                     document.getElementById('session-reset').textContent = `Reset: ${formatDate(limits.session.resets_at)}`;
                 }
 
@@ -283,7 +283,7 @@
                     const used = 100 - (limits.model_specific.percent_remaining || 0);
                     document.getElementById('model-progress').style.width = used + '%';
                     document.getElementById('model-progress').className = 'progress-bar ' + getProgressClass(used);
-                    document.getElementById('model-remaining').textContent = `${limits.model_specific.percent_remaining?.toFixed(1) || '--'}% remaining`;
+                    document.getElementById('model-remaining').textContent = `${used.toFixed(1)}% used`;
                     document.getElementById('model-reset').textContent = `Reset: ${formatDate(limits.model_specific.resets_at)}`;
                 }
 
