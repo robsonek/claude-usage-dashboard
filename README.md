@@ -1,6 +1,13 @@
-# Claude Usage Dashboard - Deployment Guide
+# Claude Usage Dashboard
 
-## Overview
+Web dashboard for monitoring Claude Code CLI usage with charts and prediction.
+
+![Dashboard Screenshot](screenshot-dark.png#gh-dark-mode-only)
+![Dashboard Screenshot](screenshot-light.png#gh-light-mode-only)
+
+## Deployment Guide
+
+### Overview
 
 This document describes the deployment process for Claude Usage Dashboard
 on a fresh Debian 13 (Trixie) server.
