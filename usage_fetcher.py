@@ -55,14 +55,16 @@ QUOTA_LABELS = {
 
 def strip_ansi(text: str) -> str:
     """Remove ANSI codes from text and join split words."""
+    # Replace cursor movement codes with space first (before removing other codes)
+    text = re.sub(r'\x1b\[\d*[ABCD]', ' ', text)
     # Remove ANSI codes
     text = ANSI_PATTERN.sub('', text)
-    # Replace cursor forward (\x1b[nC) with space - these codes split words
-    text = re.sub(r'\x1b\[\d*C', ' ', text)
     # Remove remaining escape sequences
     text = re.sub(r'\x1b[^a-zA-Z]*[a-zA-Z]', '', text)
-    # Join "Rese s" -> "Resets" (artifact from cursor movement)
-    text = re.sub(r'Rese\s+s\s+', 'Resets ', text)
+    # Fix common artifacts from cursor movement
+    text = re.sub(r'Rese\s*s\s*', 'Resets ', text)
+    # Normalize multiple spaces
+    text = re.sub(r' +', ' ', text)
     return text
 
 
@@ -79,7 +81,12 @@ def parse_percentage(line: str) -> Optional[float]:
 
 
 def parse_relative_time(text: str) -> Optional[int]:
-    """Parse relative time (e.g. '2d 3h 45m') to seconds."""
+    """Parse relative time (e.g. '2d 3h 45m') to seconds.
+    Only parses if 'reset' keyword is nearby to avoid false positives."""
+    # Check if 'reset' is in text (to avoid parsing random numbers like '2m' from corrupted text)
+    if 'reset' not in text.lower():
+        return None
+
     total_seconds = 0
 
     days_match = DAYS_PATTERN.search(text)
@@ -154,6 +161,11 @@ def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
         if 'reset' in line.lower():
             reset_text = line.strip()
             break
+
+    # Always calculate duration_seconds if we have reset_time
+    if reset_time and not duration_seconds:
+        now = datetime.now()
+        duration_seconds = int((reset_time - now).total_seconds())
 
     return reset_text, reset_time, duration_seconds
 

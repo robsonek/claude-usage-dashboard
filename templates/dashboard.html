@@ -359,24 +359,24 @@
                 // Update chart data
                 // Weekly: 168h (7 days), Session: 5h, Model: 168h (week)
                 chartWeekly.data.datasets[0].data = weeklyData;
-                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168);
+                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168, weeklyReset);
                 chartWeekly.update();
 
                 chartSession.data.datasets[0].data = sessionData;
-                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5);
+                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5, sessionReset);
                 chartSession.update();
 
                 chartModel.data.datasets[0].data = modelData;
-                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168);
+                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168, modelReset);
                 chartModel.update();
             } catch (error) {
                 console.error('Error loading history:', error);
             }
         }
 
-        // Calculate trend line
-        function calculateTrendLine(data) {
-            if (data.length < 2) return [];
+        // Calculate trend line - extrapolation to reset time
+        function calculateTrendLine(data, resetAt) {
+            if (data.length < 2 || !resetAt) return [];
 
             const n = data.length;
             const times = data.map(d => d.x.getTime());
@@ -396,28 +396,37 @@
             const a = (n * sumTV - sumT * sumV) / denom;
             const b = (sumV - a * sumT) / n;
 
-            // Return only start and end points for trend line
+            // Extrapolate to reset time
+            const resetTime = new Date(resetAt);
+            const resetTimeNorm = resetTime.getTime() - t0;
+            const predictedAtReset = a * resetTimeNorm + b;
+
+            // Line from last data point to predicted value at reset
             return [
-                { x: data[0].x, y: b },
-                { x: data[n - 1].x, y: a * timesNorm[n - 1] + b }
+                { x: data[n - 1].x, y: a * timesNorm[n - 1] + b },
+                { x: resetTime, y: predictedAtReset }
             ];
         }
 
-        // Calculate target usage line (even consumption to 100% at reset)
-        // periodHours: period duration in hours (168 for weekly, 5 for session, etc.)
-        // Each point has its own resetAt to handle period transitions correctly
-        function calculateIdealLine(data, periodHours) {
-            if (data.length < 1) return [];
+        // Calculate ideal usage line (even consumption from 0% at period start to 100% at reset)
+        // Uses single resetAt and calculates correct period for each point (handles multiple periods back)
+        function calculateIdealLine(data, periodHours, resetAt) {
+            if (data.length < 1 || !resetAt) return [];
 
             const periodMs = periodHours * 60 * 60 * 1000;
+            const resetTime = new Date(resetAt).getTime();
 
-            // Generate target point for each timestamp using its own resetAt
             return data.map(point => {
-                if (!point.resetAt) return { x: point.x, y: null };
+                const pointTime = point.x.getTime();
 
-                const resetTime = new Date(point.resetAt);
-                const periodStart = new Date(resetTime.getTime() - periodMs);
-                const ideal = ((point.x.getTime() - periodStart.getTime()) / periodMs) * 100;
+                // Calculate how many periods back this point is
+                // and find the correct periodStart for this point
+                const timeSinceReset = resetTime - pointTime;
+                const periodsBack = Math.floor(timeSinceReset / periodMs);
+                const relevantResetTime = resetTime - (periodsBack * periodMs);
+                const relevantPeriodStart = relevantResetTime - periodMs;
+
+                const ideal = ((pointTime - relevantPeriodStart) / periodMs) * 100;
                 return { x: point.x, y: Math.max(0, Math.min(ideal, 100)) };
             });
         }
