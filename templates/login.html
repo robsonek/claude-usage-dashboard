@@ -2,14 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Claude Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#1a1a2e" id="meta-theme-color">
+    <title>Login - Claude Usage Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script>
         // Apply theme immediately to prevent flash
         (function() {
             const theme = localStorage.getItem('theme') || 'dark';
             document.documentElement.setAttribute('data-theme', theme);
+            var color = theme === 'dark' ? '#1a1a2e' : '#f5f7fa';
+            document.getElementById('meta-theme-color').setAttribute('content', color);
         })();
     </script>
 </head>
@@ -48,6 +51,7 @@
             document.documentElement.setAttribute('data-theme', newTheme);
             localStorage.setItem('theme', newTheme);
             updateThemeIcon(newTheme);
+            document.getElementById('meta-theme-color').setAttribute('content', newTheme === 'dark' ? '#1a1a2e' : '#f5f7fa');
         }
 
         document.addEventListener('DOMContentLoaded', () => {
