@@ -387,6 +387,8 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
 
         output = b''
         start_time = time.time()
+        last_data_time = None
+        got_usage_data = False
 
         while time.time() - start_time < timeout:
             r, _, _ = select.select([master], [], [], 0.1)
@@ -395,28 +397,26 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
                     data = os.read(master, 4096)
                     if data:
                         output += data
-                        if output.count(b'% used') >= 3:
-                            time.sleep(0.2)
-                            # Read any remaining data quickly
-                            for _ in range(5):
-                                r2, _, _ = select.select([master], [], [], 0.05)
-                                if r2:
-                                    try:
-                                        more = os.read(master, 4096)
-                                        if more:
-                                            output += more
-                                    except:
-                                        break
-                            # Send Escape to exit
-                            try:
-                                os.write(master, b'\x1b')
-                            except:
-                                pass
-                            break
+                        last_data_time = time.time()
+                        if b'% used' in data or b'% left' in data:
+                            got_usage_data = True
                 except:
                     break
+            elif last_data_time:
+                idle = time.time() - last_data_time
+                if got_usage_data and idle > 1.0:
+                    # Usage data detected - check if we have all quotas
+                    clean = emulate_terminal(output.decode('utf-8', errors='replace'))
+                    found = clean.count('% used') + clean.count('% left')
+                    if found >= 3:
+                        break
+                # No usage data yet - keep waiting until overall timeout
 
-        # Kill the process immediately
+        # Send Escape to exit cleanly, then kill
+        try:
+            os.write(master, b'\x1b')
+        except:
+            pass
         try:
             os.kill(pid, 9)
         except:
