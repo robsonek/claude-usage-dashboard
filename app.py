@@ -1,6 +1,6 @@
 """Claude Usage Dashboard - Flask Application"""
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import numpy as np
@@ -63,15 +63,14 @@ def calculate_prediction(history, limit_type='weekly'):
         return None
 
     # Filter data from last 24h or since last reset
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     recent_data = []
 
     for record in history:
         try:
             ts = datetime.fromisoformat(record.get('timestamp', '').replace('Z', '+00:00'))
-            # Convert to naive datetime for comparison
-            if ts.tzinfo:
-                ts = ts.replace(tzinfo=None)
+            if not ts.tzinfo:
+                ts = ts.replace(tzinfo=timezone.utc)
             if (now - ts).total_seconds() < 24 * 3600:
                 recent_data.append(record)
         except (ValueError, TypeError):
@@ -97,8 +96,8 @@ def calculate_prediction(history, limit_type='weekly'):
         if current_resets_at:
             try:
                 current_reset_ts = datetime.fromisoformat(current_resets_at.replace('Z', '+00:00'))
-                if current_reset_ts.tzinfo:
-                    current_reset_ts = current_reset_ts.replace(tzinfo=None)
+                if not current_reset_ts.tzinfo:
+                    current_reset_ts = current_reset_ts.replace(tzinfo=timezone.utc)
             except:
                 pass
             break
@@ -109,8 +108,8 @@ def calculate_prediction(history, limit_type='weekly'):
             return True  # No filter if we can't compare
         try:
             reset_ts = datetime.fromisoformat(reset_str.replace('Z', '+00:00'))
-            if reset_ts.tzinfo:
-                reset_ts = reset_ts.replace(tzinfo=None)
+            if not reset_ts.tzinfo:
+                reset_ts = reset_ts.replace(tzinfo=timezone.utc)
             return abs((reset_ts - current_reset_ts).total_seconds()) < 600  # 10 min tolerance
         except:
             return True
@@ -123,8 +122,8 @@ def calculate_prediction(history, limit_type='weekly'):
     for record in recent_data:
         try:
             ts = datetime.fromisoformat(record.get('timestamp', '').replace('Z', '+00:00'))
-            if ts.tzinfo:
-                ts = ts.replace(tzinfo=None)
+            if not ts.tzinfo:
+                ts = ts.replace(tzinfo=timezone.utc)
 
             # Select appropriate limit
             limits = record.get('limits', {})
@@ -195,8 +194,8 @@ def calculate_prediction(history, limit_type='weekly'):
     if resets_at:
         try:
             reset_dt = datetime.fromisoformat(resets_at.replace('Z', '+00:00'))
-            if reset_dt.tzinfo:
-                reset_dt = reset_dt.replace(tzinfo=None)
+            if not reset_dt.tzinfo:
+                reset_dt = reset_dt.replace(tzinfo=timezone.utc)
             time_to_reset = (reset_dt - now).total_seconds()
         except ValueError:
             time_to_reset = 7 * 24 * 3600  # Default one week

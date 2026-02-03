@@ -1,6 +1,6 @@
 """SQLite Database Layer for Claude Usage Dashboard"""
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 import os
 
@@ -130,7 +130,7 @@ class UsageDatabase:
         if hours is None:
             hours = 168  # 7 days
 
-        cutoff = datetime.now() - timedelta(hours=hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         cursor = self.conn.cursor()
         cursor.execute("""
