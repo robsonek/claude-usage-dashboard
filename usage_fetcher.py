@@ -5,9 +5,12 @@ Based on: https://github.com/MartinLoeper/claude-o-meter
 import re
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List
-import pexpect
 
 
 try:
@@ -17,16 +20,15 @@ except ImportError:
     CLAUDE_BIN = os.environ.get('CLAUDE_BIN', 'claude')
 
 # Regex patterns
-ANSI_PATTERN = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\))')
 PERCENT_PATTERN = re.compile(r'(\d{1,3})\s*%\s*(used|left)', re.IGNORECASE)
 DAYS_PATTERN = re.compile(r'(\d+)\s*d(?:ays?)?', re.IGNORECASE)
 HOURS_PATTERN = re.compile(r'(\d+)\s*h(?:ours?|r)?', re.IGNORECASE)
 MINUTES_PATTERN = re.compile(r'(\d+)\s*m(?:in(?:utes?)?)?', re.IGNORECASE)
 
 # Absolute time patterns
-TIME_ONLY_PATTERN = re.compile(r'(\d{1,2})(?::(\d{2}))?(am|pm)\b', re.IGNORECASE)
+TIME_ONLY_PATTERN = re.compile(r'(\d{1,2})(?::(\d{1,2}))?(am|pm)\b', re.IGNORECASE)
 DATE_NO_YEAR_PATTERN = re.compile(
-    r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(1[0-2]|[1-9])(?::(\d{2}))?(am|pm)\b',
+    r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})(?:,?\s*(?:at\s+)?)?(1[0-2]|[1-9])(?::(\d{1,2}))?(am|pm)\b',
     re.IGNORECASE
 )
 
@@ -36,6 +38,17 @@ MAX_PATTERN = re.compile(r'(?i)(?:·\s*)?claude\s+max')
 
 # Email pattern - without apostrophes and trailing spaces
 EMAIL_PATTERN = re.compile(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})')
+
+# Auth error patterns
+AUTH_ERROR_PATTERNS = {
+    'setup_required': re.compile(r"let.?s\s+get\s+started", re.IGNORECASE),
+    'token_expired': re.compile(r"(token|session)\s*(has\s+)?expired", re.IGNORECASE),
+    'not_logged_in': re.compile(r"not\s+logged\s+in|please\s+(log|sign)\s*in", re.IGNORECASE),
+    'no_subscription': re.compile(r"free\s+tier|no\s+(active\s+)?subscription", re.IGNORECASE),
+}
+
+# Quota section boundaries (to stop searching for reset time)
+QUOTA_BOUNDARIES = ['current session', 'current week', 'opus', 'sonnet']
 
 # Quota labels - lowercase for matching
 QUOTA_LABELS = {
@@ -53,19 +66,76 @@ QUOTA_LABELS = {
 }
 
 
-def strip_ansi(text: str) -> str:
-    """Remove ANSI codes from text and join split words."""
-    # Replace cursor movement codes with space first (before removing other codes)
-    text = re.sub(r'\x1b\[\d*[ABCD]', ' ', text)
-    # Remove ANSI codes
-    text = ANSI_PATTERN.sub('', text)
-    # Remove remaining escape sequences
-    text = re.sub(r'\x1b[^a-zA-Z]*[a-zA-Z]', '', text)
-    # Fix common artifacts from cursor movement
-    text = re.sub(r'Rese\s*s\s*', 'Resets ', text)
-    # Normalize multiple spaces
-    text = re.sub(r' +', ' ', text)
-    return text
+def emulate_terminal(data: str, width: int = 120) -> str:
+    """Emulate terminal to properly handle cursor movements."""
+    lines = {}
+    row, col = 0, 0
+    i = 0
+
+    while i < len(data):
+        c = data[i]
+
+        # ESC sequence
+        if c == '\x1b' and i + 1 < len(data):
+            if data[i+1] == '[':
+                # Find end of CSI sequence
+                j = i + 2
+                while j < len(data) and data[j] not in 'ABCDHJKfmnsu':
+                    j += 1
+                if j < len(data):
+                    seq = data[i+2:j]
+                    cmd = data[j]
+
+                    # Parse number
+                    num = 1
+                    if seq.isdigit():
+                        num = int(seq)
+
+                    if cmd == 'C':  # Cursor forward
+                        col += num
+                    elif cmd == 'D':  # Cursor back
+                        col = max(0, col - num)
+                    elif cmd == 'A':  # Cursor up
+                        row = max(0, row - num)
+                    elif cmd == 'B':  # Cursor down
+                        row += num
+                    elif cmd == 'H' or cmd == 'f':  # Cursor position
+                        parts = seq.split(';')
+                        row = int(parts[0]) - 1 if parts[0] else 0
+                        col = int(parts[1]) - 1 if len(parts) > 1 and parts[1] else 0
+
+                    i = j + 1
+                    continue
+            elif data[i+1] == ']':
+                # OSC sequence - find terminator
+                j = i + 2
+                while j < len(data) and data[j] != '\x07' and not (data[j] == '\x1b' and j+1 < len(data) and data[j+1] == '\\'):
+                    j += 1
+                i = j + 1
+                continue
+            else:
+                i += 2
+                continue
+
+        # Regular characters
+        if c == '\r':
+            col = 0
+        elif c == '\n':
+            row += 1
+            col = 0
+        elif c >= ' ' or c == '\t':
+            if row not in lines:
+                lines[row] = [' '] * width
+            if col < width:
+                lines[row][col] = c
+            col += 1
+
+        i += 1
+
+    result = []
+    for r in sorted(lines.keys()):
+        result.append(''.join(lines[r]).rstrip())
+    return '\n'.join(result)
 
 
 def parse_percentage(line: str) -> Optional[float]:
@@ -105,17 +175,41 @@ def parse_relative_time(text: str) -> Optional[int]:
 
 
 def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
-    """Parse reset time from lines."""
-    search_text = ' '.join(lines[start_idx:min(start_idx + 5, len(lines))])
+    """Parse reset time from lines. Searches up to 14 lines, stops at quota boundaries."""
+    # Find end index - either 14 lines or until we hit a quota boundary
+    end_idx = min(start_idx + 14, len(lines))
+    for i in range(start_idx + 1, end_idx):
+        line_lower = lines[i].lower()
+        for boundary in QUOTA_BOUNDARIES:
+            if boundary in line_lower:
+                end_idx = i
+                break
+        if end_idx == i:
+            break
+
+    search_text = ' '.join(lines[start_idx:end_idx])
+
+    # Extract timezone from text (e.g. "Europe/Warsaw", "UTC")
+    tz = timezone.utc
+    tz_match = re.search(r'\(([A-Za-z_/]+)\)', search_text)
+    if tz_match:
+        tz_name = tz_match.group(1)
+        if tz_name.upper() != 'UTC':
+            try:
+                tz = ZoneInfo(tz_name)
+            except:
+                pass
 
     # Try to parse relative time
     duration_seconds = parse_relative_time(search_text)
 
     reset_time = None
-    if duration_seconds:
-        reset_time = datetime.now() + timedelta(seconds=duration_seconds)
+    now_utc = datetime.now(timezone.utc)
 
-    # Try to find absolute time with date
+    if duration_seconds:
+        reset_time = now_utc + timedelta(seconds=duration_seconds)
+
+    # Try to find absolute time with date (preferred over relative time)
     date_match = DATE_NO_YEAR_PATTERN.search(search_text)
     if date_match:
         month_str, day, hour, minute, ampm = date_match.groups()
@@ -129,11 +223,16 @@ def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
         elif ampm.lower() == 'am' and hour == 12:
             hour = 0
 
-        now = datetime.now()
-        year = now.year
-        reset_time = datetime(year, month, int(day), hour, int(minute))
-        if reset_time < now:
-            reset_time = datetime(year + 1, month, int(day), hour, int(minute))
+        year = now_utc.year
+        # Create datetime in the detected timezone
+        reset_time = datetime(year, month, int(day), hour, int(minute), tzinfo=tz)
+        # Convert to UTC
+        reset_time = reset_time.astimezone(timezone.utc)
+        if reset_time < now_utc:
+            reset_time = datetime(year + 1, month, int(day), hour, int(minute), tzinfo=tz)
+            reset_time = reset_time.astimezone(timezone.utc)
+        # Recalculate duration from absolute time
+        duration_seconds = int((reset_time - now_utc).total_seconds())
     else:
         # Try to find time only (e.g. "4pm", "3:59pm")
         time_match = TIME_ONLY_PATTERN.search(search_text)
@@ -146,26 +245,28 @@ def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
             elif ampm.lower() == 'am' and hour == 12:
                 hour = 0
 
-            now = datetime.now()
-            reset_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            # Get current time in the detected timezone
+            now_tz = now_utc.astimezone(tz)
+            reset_time = now_tz.replace(hour=hour, minute=minute, second=0, microsecond=0)
             # If time has passed, it will be tomorrow
-            if reset_time < now:
+            if reset_time < now_tz:
                 reset_time += timedelta(days=1)
+            # Convert to UTC
+            reset_time = reset_time.astimezone(timezone.utc)
 
             # Calculate duration_seconds
-            duration_seconds = int((reset_time - now).total_seconds())
+            duration_seconds = int((reset_time - now_utc).total_seconds())
 
     # Find reset text
     reset_text = ''
-    for line in lines[start_idx:min(start_idx + 5, len(lines))]:
+    for line in lines[start_idx:end_idx]:
         if 'reset' in line.lower():
             reset_text = line.strip()
             break
 
     # Always calculate duration_seconds if we have reset_time
     if reset_time and not duration_seconds:
-        now = datetime.now()
-        duration_seconds = int((reset_time - now).total_seconds())
+        duration_seconds = int((reset_time - now_utc).total_seconds())
 
     return reset_text, reset_time, duration_seconds
 
@@ -238,6 +339,15 @@ def detect_account_type(text: str) -> str:
     return 'unknown'
 
 
+def detect_auth_error(text: str) -> Optional[str]:
+    """Detect authentication errors in output."""
+    text_lower = text.lower()
+    for error_type, pattern in AUTH_ERROR_PATTERNS.items():
+        if pattern.search(text_lower):
+            return error_type
+    return None
+
+
 def parse_email(text: str) -> Optional[str]:
     """Parse email from output."""
     match = EMAIL_PATTERN.search(text)
@@ -252,58 +362,86 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
         Dict with usage data
     """
     try:
-        # Run claude /usage in PTY from script directory (must be trusted folder)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        child = pexpect.spawn(
-            CLAUDE_BIN,
-            ['/usage'],
-            timeout=timeout,
-            encoding='utf-8',
-            env={**os.environ, 'TERM': 'xterm-256color'},
-            cwd=script_dir
-        )
-
-        # Wait for usage data to load (may take several seconds)
+        import pty
+        import select
         import time
-        output = ''
 
-        # Collect output for up to 25 seconds, looking for multiple % patterns
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Create PTY for proper terminal emulation
+        master, slave = pty.openpty()
+
+        pid = os.fork()
+        if pid == 0:
+            # Child process
+            os.close(master)
+            os.setsid()
+            os.dup2(slave, 0)
+            os.dup2(slave, 1)
+            os.dup2(slave, 2)
+            os.close(slave)
+            os.chdir(script_dir)
+            os.execlp(CLAUDE_BIN, CLAUDE_BIN, '/usage')
+
+        os.close(slave)
+
+        output = b''
         start_time = time.time()
-        percent_count = 0
 
-        while time.time() - start_time < 25:
-            try:
-                idx = child.expect(['% used', '% left', pexpect.TIMEOUT], timeout=3)
-                output += child.before or ''
-                if idx in [0, 1]:
-                    output += child.after or ''
-                    percent_count += 1
-                    # We expect at least 3 sections: session, weekly, model-specific
-                    if percent_count >= 3:
-                        # Wait a bit more for any remaining data
-                        time.sleep(1)
-                        break
-            except pexpect.EOF:
-                break
-            except:
-                pass
-
-        # Collect any remaining output
-        time.sleep(0.5)
-        try:
-            while True:
-                chunk = child.read_nonblocking(size=10000, timeout=1)
-                if chunk:
-                    output += chunk
-                else:
+        while time.time() - start_time < timeout:
+            r, _, _ = select.select([master], [], [], 0.1)
+            if r:
+                try:
+                    data = os.read(master, 4096)
+                    if data:
+                        output += data
+                        if output.count(b'% used') >= 3:
+                            time.sleep(0.2)
+                            # Read any remaining data quickly
+                            for _ in range(5):
+                                r2, _, _ = select.select([master], [], [], 0.05)
+                                if r2:
+                                    try:
+                                        more = os.read(master, 4096)
+                                        if more:
+                                            output += more
+                                    except:
+                                        break
+                            # Send Escape to exit
+                            try:
+                                os.write(master, b'\x1b')
+                            except:
+                                pass
+                            break
+                except:
                     break
+
+        # Kill the process immediately
+        try:
+            os.kill(pid, 9)
+        except:
+            pass
+        try:
+            os.close(master)
+        except:
+            pass
+        try:
+            os.waitpid(pid, os.WNOHANG)
         except:
             pass
 
-        child.terminate(force=True)
+        # Parse output with terminal emulation
+        text = output.decode('utf-8', errors='replace')
+        clean_output = emulate_terminal(text)
 
-        # Parse output
-        clean_output = strip_ansi(output)
+        # Check for auth errors first
+        auth_error = detect_auth_error(clean_output)
+        if auth_error:
+            return {
+                'error': 'Authentication error',
+                'auth_error_type': auth_error,
+                'details': f'Claude CLI returned: {auth_error}'
+            }
 
         quotas = parse_quotas(clean_output)
 
@@ -311,7 +449,7 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
             'account_type': detect_account_type(clean_output),
             'email': parse_email(clean_output),
             'quotas': quotas,
-            'captured_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ')
+            'captured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         }
 
     except Exception as e:
