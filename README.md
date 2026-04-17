@@ -10,13 +10,14 @@ Web dashboard for monitoring Claude Code CLI usage with charts and prediction.
 ### Overview
 
 This document describes the deployment process for Claude Usage Dashboard
-on a fresh Debian 13 (Trixie) server.
+on a Linux server. Examples use Debian 13 (Trixie) but any modern Linux
+distribution with Python 3.11+ works.
 
 ## Prerequisites
 
-- Debian 13 (Trixie) server with root/sudo access
+- Linux server with root/sudo access (tested on Debian 13 / Trixie)
 - SSH access to the server
-- Python 3.11+ (Debian 13 ships with Python 3.13)
+- Python 3.11+ with `venv`
 - Git
 - Claude Code CLI (`curl -fsSL https://claude.ai/install.sh | bash`) - after installation run `claude` to authenticate
 
@@ -146,15 +147,22 @@ Expected response: HTTP 302 redirect to login page.
 
 ## Configuration
 
-Set environment variables in `/home/YOUR_USERNAME/claude-dashboard/.env` or
-in the systemd service file:
+Set environment variables in the systemd service file (the app does not
+read `.env` files) by adding `Environment=KEY=value` lines under
+`[Service]`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| FLASK_SECRET_KEY | Session encryption key | (auto-generated) |
+| FLASK_SECRET_KEY | Session encryption key — **must be changed** | (insecure placeholder) |
 | DASHBOARD_USERNAME | Login username | admin |
-| DASHBOARD_PASSWORD | Login password | claude123 |
+| DASHBOARD_PASSWORD | Login password — **must be changed** | claude123 |
 | CLAUDE_BIN | Path to Claude CLI | claude |
+
+Generate a secure secret key with:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+```
 
 ## Management Commands
 
@@ -209,6 +217,44 @@ Without authentication, the dashboard will show empty quota data.
 ### Database errors
 - Ensure write permissions on working directory
 - Check disk space: `df -h`
+
+### Dashboard shows empty quotas
+Typical causes and how to diagnose:
+
+1. Claude CLI not authenticated on the server — run `claude` manually and
+   complete the OAuth flow.
+2. `claude` binary not in the cron job's PATH — verify the `PATH=...`
+   line in `crontab -l`.
+3. Claude CLI UI changed — run the fetcher by hand with debug output:
+
+   ```bash
+   cd ~/claude-dashboard
+   DEBUG_USAGE_FETCHER=1 venv/bin/python usage_fetcher.py
+   ```
+
+   The collector (`collect_history.sh`) now also logs `WARN: empty quotas`
+   or `WARN: fetcher returned error: ...` straight into `cron.log` when
+   something goes wrong — check it first:
+
+   ```bash
+   tail -n 50 ~/claude-dashboard/cron.log
+   ```
+
+### `cron.log` grows indefinitely
+Add a logrotate rule at `/etc/logrotate.d/claude-dashboard`:
+
+```
+/home/YOUR_USERNAME/claude-dashboard/cron.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+Or truncate manually from time to time: `: > ~/claude-dashboard/cron.log`.
 
 ---
 Deployment completed successfully.
