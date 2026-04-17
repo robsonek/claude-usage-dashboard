@@ -4,13 +4,20 @@ Based on: https://github.com/MartinLoeper/claude-o-meter
 """
 import re
 import os
+import sys
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List
+
+log = logging.getLogger(__name__)
+if os.environ.get('DEBUG_USAGE_FETCHER'):
+    logging.basicConfig(level=logging.DEBUG, stream=sys.stderr,
+                        format='[%(asctime)s] %(message)s')
 
 
 try:
@@ -47,6 +54,19 @@ AUTH_ERROR_PATTERNS = {
     'no_subscription': re.compile(r"free\s+tier|no\s+(active\s+)?subscription", re.IGNORECASE),
 }
 
+# Raw-buffer marker: Claude prints "N%<ESC>[1Cused" (cursor forward splits % and used).
+# Used both to detect completeness before terminal emulation and to pick the right frame.
+RAW_PCT_USED_PATTERN = re.compile(r'\d+%\x1b\[1Cused')
+
+# DEC private-mode 2026: synchronized output (begin/end). Claude wraps each render
+# in these. We stop reading at the end of the first frame that already contains all
+# quota percentages, because subsequent frames are diff updates that overwrite the
+# quota labels with blanks.
+SYNC_UPDATE_END = re.compile(r'\x1b\[\?2026l')
+
+# Minimum "% used" occurrences we consider a complete render.
+MIN_COMPLETE_QUOTAS = 3
+
 # Quota section boundaries (to stop searching for reset time)
 QUOTA_BOUNDARIES = ['current session', 'current week', 'opus', 'sonnet']
 
@@ -67,7 +87,12 @@ QUOTA_LABELS = {
 
 
 def emulate_terminal(data: str, width: int = 120) -> str:
-    """Emulate terminal to properly handle cursor movements."""
+    """Emulate terminal to properly handle cursor movements.
+
+    Handles CSI final bytes across the full ANSI range (0x40-0x7E), not just the
+    handful we actually interpret — previously unlisted finals like 'h'/'l' caused
+    the parser to swallow content until it hit one of the recognized bytes.
+    """
     lines = {}
     row, col = 0, 0
     i = 0
@@ -78,18 +103,24 @@ def emulate_terminal(data: str, width: int = 120) -> str:
         # ESC sequence
         if c == '\x1b' and i + 1 < len(data):
             if data[i+1] == '[':
-                # Find end of CSI sequence
+                # CSI: consume parameter/intermediate bytes (0x20-0x3F) until final (0x40-0x7E)
                 j = i + 2
-                while j < len(data) and data[j] not in 'ABCDHJKfmnsu':
+                while j < len(data) and not (0x40 <= ord(data[j]) <= 0x7E):
                     j += 1
                 if j < len(data):
                     seq = data[i+2:j]
                     cmd = data[j]
 
-                    # Parse number
+                    # DEC private-mode (e.g. [?2026h for synchronized output): no cursor effect
+                    if seq.startswith('?'):
+                        i = j + 1
+                        continue
+
+                    # Parse leading number (for cursor movement commands)
                     num = 1
-                    if seq.isdigit():
-                        num = int(seq)
+                    first_param = seq.split(';', 1)[0]
+                    if first_param.isdigit():
+                        num = int(first_param)
 
                     if cmd == 'C':  # Cursor forward
                         col += num
@@ -99,7 +130,7 @@ def emulate_terminal(data: str, width: int = 120) -> str:
                         row = max(0, row - num)
                     elif cmd == 'B':  # Cursor down
                         row += num
-                    elif cmd == 'H' or cmd == 'f':  # Cursor position
+                    elif cmd in ('H', 'f'):  # Cursor position
                         parts = seq.split(';')
                         row = int(parts[0]) - 1 if parts[0] else 0
                         col = int(parts[1]) - 1 if len(parts) > 1 and parts[1] else 0
@@ -107,7 +138,7 @@ def emulate_terminal(data: str, width: int = 120) -> str:
                     i = j + 1
                     continue
             elif data[i+1] == ']':
-                # OSC sequence - find terminator
+                # OSC sequence - find terminator (BEL or ST)
                 j = i + 2
                 while j < len(data) and data[j] != '\x07' and not (data[j] == '\x1b' and j+1 < len(data) and data[j+1] == '\\'):
                     j += 1
@@ -136,6 +167,16 @@ def emulate_terminal(data: str, width: int = 120) -> str:
     for r in sorted(lines.keys()):
         result.append(''.join(lines[r]).rstrip())
     return '\n'.join(result)
+
+
+def trim_to_complete_frame(raw: str) -> str:
+    """Cut raw PTY output to the end of the first synchronized-output frame that
+    already contains all quota percentages. Later frames are diff updates that
+    overwrite the quota labels with blanks — if we emulate them, labels vanish."""
+    for m in SYNC_UPDATE_END.finditer(raw):
+        if len(RAW_PCT_USED_PATTERN.findall(raw, 0, m.end())) >= MIN_COMPLETE_QUOTAS:
+            return raw[:m.end()]
+    return raw
 
 
 def parse_percentage(line: str) -> Optional[float]:
@@ -354,6 +395,49 @@ def parse_email(text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _reap(pid: int, master_fd: int) -> None:
+    """Shut down the claude child process cleanly: ESC → SIGTERM → SIGKILL,
+    always reaping with a blocking waitpid at the end so we don't leave zombies."""
+    import time
+
+    # Polite exit request
+    try:
+        os.write(master_fd, b'\x1b')
+    except OSError:
+        pass
+    time.sleep(0.1)
+
+    def wait_nb(deadline: float) -> bool:
+        while time.time() < deadline:
+            try:
+                wpid, _ = os.waitpid(pid, os.WNOHANG)
+                if wpid == pid:
+                    return True
+            except ChildProcessError:
+                return True
+            time.sleep(0.05)
+        return False
+
+    try:
+        os.kill(pid, 15)  # SIGTERM
+    except ProcessLookupError:
+        pass
+    if not wait_nb(time.time() + 1.0):
+        try:
+            os.kill(pid, 9)  # SIGKILL
+        except ProcessLookupError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+
+    try:
+        os.close(master_fd)
+    except OSError:
+        pass
+
+
 def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
     """
     Fetch usage data from claude CLI.
@@ -368,7 +452,6 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # Create PTY for proper terminal emulation
         master, slave = pty.openpty()
 
         pid = os.fork()
@@ -382,57 +465,59 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
             os.close(slave)
             os.chdir(script_dir)
             os.execlp(CLAUDE_BIN, CLAUDE_BIN, '/usage')
+            os._exit(127)  # execlp failed
 
         os.close(slave)
 
         output = b''
         start_time = time.time()
-        last_data_time = None
-        got_usage_data = False
+        last_data_time: Optional[float] = None
+        complete_detected = False
 
         while time.time() - start_time < timeout:
             r, _, _ = select.select([master], [], [], 0.1)
             if r:
                 try:
                     data = os.read(master, 4096)
-                    if data:
-                        output += data
-                        last_data_time = time.time()
-                        if b'% used' in data or b'% left' in data:
-                            got_usage_data = True
-                except:
+                except OSError:
                     break
-            elif last_data_time:
-                idle = time.time() - last_data_time
-                if got_usage_data and idle > 1.0:
-                    # Usage data detected - check if we have all quotas
-                    clean = emulate_terminal(output.decode('utf-8', errors='replace'))
-                    found = clean.count('% used') + clean.count('% left')
-                    if found >= 3:
+                if not data:
+                    break
+                output += data
+                last_data_time = time.time()
+
+                # Detect completeness on the raw buffer — Claude prints
+                # "N%<ESC>[1Cused", so a literal "% used" substring never matches.
+                # End the loop as soon as we see a sync-update termination after
+                # the 3rd "% used"; waiting longer only lets diff frames overwrite labels.
+                if not complete_detected:
+                    text = output.decode('utf-8', errors='replace')
+                    if len(RAW_PCT_USED_PATTERN.findall(text)) >= MIN_COMPLETE_QUOTAS:
+                        complete_detected = True
+
+                if complete_detected:
+                    text = output.decode('utf-8', errors='replace')
+                    if SYNC_UPDATE_END.search(text, _cut_search_start(text)) or last_data_time and time.time() - last_data_time > 0.5:
+                        log.debug('complete data detected, %d bytes, %.2fs elapsed',
+                                  len(output), time.time() - start_time)
                         break
-                # No usage data yet - keep waiting until overall timeout
+            elif last_data_time and time.time() - last_data_time > 2.0:
+                # Idle timeout — claude went quiet without emitting the markers we
+                # expect (auth error, setup wizard, unknown layout). Give up and parse what we have.
+                log.debug('idle timeout, %d bytes', len(output))
+                break
 
-        # Send Escape to exit cleanly, then kill
-        try:
-            os.write(master, b'\x1b')
-        except:
-            pass
-        try:
-            os.kill(pid, 9)
-        except:
-            pass
-        try:
-            os.close(master)
-        except:
-            pass
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except:
-            pass
+        if time.time() - start_time >= timeout:
+            log.debug('overall timeout reached, %d bytes', len(output))
 
-        # Parse output with terminal emulation
-        text = output.decode('utf-8', errors='replace')
-        clean_output = emulate_terminal(text)
+        _reap(pid, master)
+
+        # Trim to first complete frame to avoid diff-update frames that blank labels
+        raw_text = output.decode('utf-8', errors='replace')
+        trimmed = trim_to_complete_frame(raw_text)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug('trimmed %d → %d bytes', len(raw_text), len(trimmed))
+        clean_output = emulate_terminal(trimmed)
 
         # Check for auth errors first
         auth_error = detect_auth_error(clean_output)
@@ -444,6 +529,9 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
             }
 
         quotas = parse_quotas(clean_output)
+
+        if not quotas:
+            log.debug('no quotas parsed; clean output was:\n%s', clean_output)
 
         return {
             'account_type': detect_account_type(clean_output),
@@ -457,6 +545,20 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
             'error': 'Failed to get usage data',
             'details': str(e)
         }
+
+
+def _cut_search_start(text: str) -> int:
+    """Offset from which to search for sync-update end — after the 3rd '% used' marker."""
+    matches = RAW_PCT_USED_PATTERN.findall(text)
+    if len(matches) < MIN_COMPLETE_QUOTAS:
+        return len(text)
+    # Find position of the 3rd match
+    count = 0
+    for m in RAW_PCT_USED_PATTERN.finditer(text):
+        count += 1
+        if count == MIN_COMPLETE_QUOTAS:
+            return m.end()
+    return len(text)
 
 
 if __name__ == '__main__':
