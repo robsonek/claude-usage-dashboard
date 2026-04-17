@@ -1,10 +1,12 @@
 #!/bin/bash
 # Script for collecting Claude usage history
-# Runs via systemd timer every 5 minutes
+# Runs via systemd timer / cron every 5 minutes
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$SCRIPT_DIR/data"
 VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
+
+log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
 # Create directory for today's data
 TODAY=$(date +%Y-%m-%d)
@@ -12,16 +14,32 @@ TIME=$(date +%H-%M)
 DAY_DIR="$DATA_DIR/$TODAY"
 mkdir -p "$DAY_DIR"
 
-# Fetch data using usage_fetcher.py
-if [ -x "$VENV_PYTHON" ]; then
-    USAGE_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/usage_fetcher.py" 2>/dev/null)
+if [ ! -x "$VENV_PYTHON" ]; then
+    log "ERROR: venv Python not found at $VENV_PYTHON"
+    exit 1
+fi
 
-    # Save to JSON file (for backward compatibility)
-    echo "$USAGE_JSON" > "$DAY_DIR/$TIME.json"
+# Fetch data using usage_fetcher.py — stderr goes to the cron log, not /dev/null
+USAGE_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/usage_fetcher.py")
+FETCH_STATUS=$?
 
-    # Save to SQLite database
-    echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py" 2>/dev/null
-else
-    echo "Error: venv Python not found at $VENV_PYTHON" >&2
+if [ $FETCH_STATUS -ne 0 ] || [ -z "$USAGE_JSON" ]; then
+    log "ERROR: usage_fetcher.py exited with $FETCH_STATUS, output=${#USAGE_JSON} bytes"
+    exit 1
+fi
+
+# Warn (don't fail) on fetch problems — the JSON is still written so we can inspect later
+if echo "$USAGE_JSON" | grep -q '"error"'; then
+    log "WARN: fetcher returned error: $(echo "$USAGE_JSON" | head -c 200)"
+elif echo "$USAGE_JSON" | grep -q '"quotas": \[\]'; then
+    log "WARN: fetcher returned empty quotas"
+fi
+
+# Save to JSON file (history / reproducibility)
+echo "$USAGE_JSON" > "$DAY_DIR/$TIME.json"
+
+# Save to SQLite database
+if ! echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py"; then
+    log "ERROR: insert_to_db.py failed"
     exit 1
 fi

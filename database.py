@@ -134,14 +134,33 @@ class UsageDatabase:
 
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT id, captured_at, account_type, email
-            FROM snapshots
-            WHERE captured_at >= ?
-            ORDER BY captured_at ASC
+            SELECT s.id, s.captured_at, s.account_type, s.email,
+                   q.quota_type, q.model, q.percent_remaining,
+                   q.resets_at, q.time_remaining_seconds
+            FROM snapshots s
+            LEFT JOIN quotas q ON q.snapshot_id = s.id
+            WHERE s.captured_at >= ?
+            ORDER BY s.captured_at ASC, q.id ASC
         """, (cutoff,))
 
-        rows = cursor.fetchall()
-        return [self._snapshot_to_dict(row) for row in rows]
+        by_id: Dict[int, Dict[str, Any]] = {}
+        order: List[int] = []
+        for row in cursor.fetchall():
+            sid = row['id']
+            snap = by_id.get(sid)
+            if snap is None:
+                snap = {
+                    'timestamp': self._format_timestamp(row['captured_at']),
+                    'limits': {},
+                    'account_type': row['account_type'],
+                    'email': row['email'],
+                }
+                by_id[sid] = snap
+                order.append(sid)
+            if row['quota_type']:
+                snap['limits'][row['quota_type']] = self._quota_row_to_dict(row)
+
+        return [by_id[sid] for sid in order]
 
     def _snapshot_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """Convert a snapshot database row to dashboard format."""
@@ -155,44 +174,43 @@ class UsageDatabase:
 
         limits = {}
         for quota in cursor.fetchall():
-            quota_type = quota['quota_type']
-
-            resets_at_str = None
-            time_remaining_human = None
-
-            if quota['resets_at']:
-                try:
-                    resets_at = datetime.fromisoformat(str(quota['resets_at']))
-                    resets_at_str = resets_at.strftime('%Y-%m-%dT%H:%M:%SZ')
-                except (ValueError, TypeError):
-                    resets_at_str = str(quota['resets_at'])
-
-            if quota['time_remaining_seconds']:
-                time_remaining_human = self._format_duration(quota['time_remaining_seconds'])
-
-            limit_data = {
-                'percent_remaining': quota['percent_remaining'],
-                'resets_at': resets_at_str,
-                'time_remaining_human': time_remaining_human
-            }
-
-            if quota['model']:
-                limit_data['model'] = quota['model']
-
-            limits[quota_type] = limit_data
-
-        captured_at = row['captured_at']
-        if isinstance(captured_at, str):
-            timestamp = captured_at
-        else:
-            timestamp = captured_at.strftime('%Y-%m-%dT%H:%M:%SZ')
+            limits[quota['quota_type']] = self._quota_row_to_dict(quota)
 
         return {
-            'timestamp': timestamp,
+            'timestamp': self._format_timestamp(row['captured_at']),
             'limits': limits,
             'account_type': row['account_type'],
             'email': row['email']
         }
+
+    def _quota_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        """Format a quotas row (from direct SELECT or JOIN) for dashboard output."""
+        resets_at_str = None
+        if row['resets_at']:
+            try:
+                resets_at = datetime.fromisoformat(str(row['resets_at']))
+                resets_at_str = resets_at.strftime('%Y-%m-%dT%H:%M:%SZ')
+            except (ValueError, TypeError):
+                resets_at_str = str(row['resets_at'])
+
+        time_remaining_human = None
+        if row['time_remaining_seconds']:
+            time_remaining_human = self._format_duration(row['time_remaining_seconds'])
+
+        data = {
+            'percent_remaining': row['percent_remaining'],
+            'resets_at': resets_at_str,
+            'time_remaining_human': time_remaining_human,
+        }
+        if row['model']:
+            data['model'] = row['model']
+        return data
+
+    @staticmethod
+    def _format_timestamp(captured_at) -> str:
+        if isinstance(captured_at, str):
+            return captured_at
+        return captured_at.strftime('%Y-%m-%dT%H:%M:%SZ')
 
     def _format_duration(self, seconds: int) -> str:
         """Format seconds as human-readable text."""
