@@ -234,6 +234,47 @@ class UsageDatabase:
         cursor.execute("SELECT COUNT(*) FROM snapshots")
         return cursor.fetchone()[0]
 
+    def get_period_boundaries(self) -> Dict[str, List[str]]:
+        """
+        Return the chronological list of distinct resets_at values per quota_type
+        observed across the entire database. Used by the dashboard to render the
+        ideal-consumption line over the *actual* period length (which Anthropic
+        may shorten mid-week), instead of assuming a fixed 168h window.
+
+        Small fluctuations (e.g. :59 vs :00 on the same hour) coming from the
+        CLI are collapsed so the dashboard treats them as one reset.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT quota_type, resets_at
+            FROM quotas
+            WHERE resets_at IS NOT NULL
+            ORDER BY quota_type, resets_at ASC
+        """)
+
+        bucket_ms = 30 * 60  # 30 min tolerance for equivalence
+        out: Dict[str, List[str]] = {}
+        last_bucket_per_type: Dict[str, int] = {}
+
+        for row in cursor.fetchall():
+            qtype = row['quota_type']
+            try:
+                dt = datetime.fromisoformat(str(row['resets_at']))
+            except (ValueError, TypeError):
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            bucket = int(dt.timestamp() // bucket_ms)
+            prev_bucket = last_bucket_per_type.get(qtype)
+            if prev_bucket is not None and abs(bucket - prev_bucket) <= 1:
+                continue  # collapse near-duplicate resets
+            last_bucket_per_type[qtype] = bucket
+            out.setdefault(qtype, []).append(
+                dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            )
+
+        return out
+
     def close(self):
         """Close database connection."""
         if self.conn:

@@ -124,15 +124,40 @@
             model: { resetAt: null, periodHours: 168 }
         };
 
-        // Function calculating target value for a given moment
-        function getIdealValueAt(timestamp, resetAt, periodHours) {
-            if (!resetAt) return null;
-            const resetTime = new Date(resetAt);
-            const periodMs = periodHours * 60 * 60 * 1000;
-            const periodStart = new Date(resetTime.getTime() - periodMs);
-            const timeMs = timestamp instanceof Date ? timestamp.getTime() : timestamp;
-            const ideal = ((timeMs - periodStart.getTime()) / periodMs) * 100;
-            return Math.max(0, Math.min(ideal, 100));
+        // Maps normalized reset timestamp -> previous reset timestamp (period start).
+        // Populated from /api/periods so we can render the ideal line over the
+        // actual period length even when Anthropic shortens a weekly cycle.
+        const periodStartByReset = {
+            weekly: new Map(),
+            session: new Map(),
+            model_specific: new Map()
+        };
+
+        // Bucket resets to 30-min granularity to ignore the :59 / :00 fluctuation
+        // that the Claude CLI sometimes reports for the same reset instant.
+        function normalizeResetKey(resetIso) {
+            if (!resetIso) return null;
+            const ms = new Date(resetIso).getTime();
+            if (Number.isNaN(ms)) return null;
+            return Math.round(ms / (30 * 60 * 1000));
+        }
+
+        async function fetchPeriodBoundaries() {
+            try {
+                const res = await fetch('/api/periods');
+                const data = await res.json();
+                for (const qtype of ['weekly', 'session', 'model_specific']) {
+                    const list = Array.isArray(data[qtype]) ? data[qtype] : [];
+                    const map = new Map();
+                    for (let i = 1; i < list.length; i++) {
+                        const key = normalizeResetKey(list[i]);
+                        if (key !== null) map.set(key, list[i - 1]);
+                    }
+                    periodStartByReset[qtype] = map;
+                }
+            } catch (error) {
+                console.error('Error loading period boundaries:', error);
+            }
         }
 
         // Chart configuration
@@ -307,7 +332,8 @@
             try {
                 const [historyRes, currentRes] = await Promise.all([
                     fetch(`/api/history?hours=${currentTimeRange}`),
-                    fetch('/api/current')
+                    fetch('/api/current'),
+                    fetchPeriodBoundaries()
                 ]);
                 const history = await historyRes.json();
                 const current = await currentRes.json();
@@ -360,17 +386,18 @@
                 chartPeriodData.model.resetAt = modelReset;
 
                 // Update chart data
-                // Weekly: 168h (7 days), Session: 5h, Model: 168h (week)
+                // Fallback period hours are used only when the DB has no earlier
+                // reset for a given resets_at (e.g. first period ever recorded).
                 chartWeekly.data.datasets[0].data = weeklyData;
-                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168, weeklyReset);
+                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168, 'weekly');
                 chartWeekly.update();
 
                 chartSession.data.datasets[0].data = sessionData;
-                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5, sessionReset);
+                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5, 'session');
                 chartSession.update();
 
                 chartModel.data.datasets[0].data = modelData;
-                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168, modelReset);
+                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168, 'model_specific');
                 chartModel.update();
             } catch (error) {
                 console.error('Error loading history:', error);
@@ -411,25 +438,33 @@
             ];
         }
 
-        // Calculate ideal usage line (even consumption from 0% at period start to 100% at reset)
-        // Uses single resetAt and calculates correct period for each point (handles multiple periods back)
-        function calculateIdealLine(data, periodHours, resetAt) {
-            if (data.length < 1 || !resetAt) return [];
+        // Calculate ideal usage line (even consumption from 0% at period start
+        // to 100% at reset). Each data point carries its own `resetAt`; we look
+        // up the matching previous reset from /api/periods to use the *actual*
+        // period length. Fallback to `fallbackPeriodHours` only when no prior
+        // reset is recorded (e.g. first period ever captured).
+        function calculateIdealLine(data, fallbackPeriodHours, quotaType) {
+            if (data.length < 1) return [];
 
-            const periodMs = periodHours * 60 * 60 * 1000;
-            const resetTime = new Date(resetAt).getTime();
+            const fallbackMs = fallbackPeriodHours * 60 * 60 * 1000;
+            const startMap = periodStartByReset[quotaType] || new Map();
 
             return data.map(point => {
+                if (!point.resetAt) return { x: point.x, y: null };
+
                 const pointTime = point.x.getTime();
+                const resetMs = new Date(point.resetAt).getTime();
+                const key = normalizeResetKey(point.resetAt);
 
-                // Calculate how many periods back this point is
-                // and find the correct periodStart for this point
-                const timeSinceReset = resetTime - pointTime;
-                const periodsBack = Math.floor(timeSinceReset / periodMs);
-                const relevantResetTime = resetTime - (periodsBack * periodMs);
-                const relevantPeriodStart = relevantResetTime - periodMs;
+                const prevResetIso = startMap.get(key);
+                const periodStartMs = prevResetIso
+                    ? new Date(prevResetIso).getTime()
+                    : resetMs - fallbackMs;
 
-                const ideal = ((pointTime - relevantPeriodStart) / periodMs) * 100;
+                const periodMs = resetMs - periodStartMs;
+                if (periodMs <= 0) return { x: point.x, y: null };
+
+                const ideal = ((pointTime - periodStartMs) / periodMs) * 100;
                 return { x: point.x, y: Math.max(0, Math.min(ideal, 100)) };
             });
         }

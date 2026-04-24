@@ -292,6 +292,20 @@ def api_history():
     return jsonify(history)
 
 
+@app.route('/api/periods')
+@login_required
+def api_periods():
+    """Returns chronological distinct reset timestamps per quota type.
+
+    The frontend uses this to compute the *actual* period length (previous
+    reset → current reset) when rendering the ideal-consumption line, instead
+    of assuming a fixed 168h weekly window — Anthropic has been shortening
+    weekly periods mid-cycle.
+    """
+    db = get_db()
+    return jsonify(db.get_period_boundaries())
+
+
 @app.route('/api/prediction')
 @login_required
 def api_prediction():
