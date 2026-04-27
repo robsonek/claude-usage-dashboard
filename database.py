@@ -5,6 +5,19 @@ from typing import Optional, Dict, Any, List
 import os
 
 
+# Default period length per quota type when bootstrapping period_start_at
+# without prior history. After one full period the heuristic uses observed boundaries.
+_DEFAULT_PERIOD_HOURS = {
+    'session': 5,
+    'weekly': 168,
+    'model_specific': 168,
+}
+
+# Resets within this many seconds of each other are considered "the same"
+# (handles claude /usage's :59 vs :00 fluctuation for the same reset instant).
+_RESET_EQUIVALENCE_SECONDS = 1800
+
+
 class UsageDatabase:
     """Data Access Layer for usage snapshots stored in SQLite."""
 
@@ -34,12 +47,18 @@ class UsageDatabase:
                 percent_remaining REAL NOT NULL,
                 resets_at DATETIME,
                 time_remaining_seconds INTEGER,
+                period_start_at DATETIME,
                 FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_captured_at ON snapshots(captured_at);
             CREATE INDEX IF NOT EXISTS idx_quotas_snapshot_id ON quotas(snapshot_id);
         """)
+        # Add column for older databases that pre-date period_start_at
+        cursor.execute("PRAGMA table_info(quotas)")
+        cols = {row['name'] for row in cursor.fetchall()}
+        if 'period_start_at' not in cols:
+            cursor.execute("ALTER TABLE quotas ADD COLUMN period_start_at DATETIME")
         self.conn.commit()
 
     def insert_snapshot(self, data: Dict[str, Any]) -> int:
@@ -79,21 +98,103 @@ class UsageDatabase:
                 except ValueError:
                     resets_at = None
 
+            period_start_at = self._compute_period_start_at(
+                quota.get('type'), quota.get('model'), captured_at, resets_at
+            )
+
             cursor.execute("""
                 INSERT INTO quotas (snapshot_id, quota_type, model, percent_remaining,
-                                   resets_at, time_remaining_seconds)
-                VALUES (?, ?, ?, ?, ?, ?)
+                                   resets_at, time_remaining_seconds, period_start_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 snapshot_id,
                 quota.get('type'),
                 quota.get('model'),
                 quota.get('percent_remaining', 0),
                 resets_at,
-                quota.get('time_remaining_seconds')
+                quota.get('time_remaining_seconds'),
+                period_start_at,
             ))
 
         self.conn.commit()
         return snapshot_id
+
+    def _compute_period_start_at(self, quota_type: Optional[str], model: Optional[str],
+                                  captured_at: datetime,
+                                  resets_at: Optional[datetime]) -> Optional[datetime]:
+        """Determine when the current period started, distinguishing reset from shift.
+
+        - same resets_at as previous snapshot → inherit prev.period_start_at
+        - resets_at changed AND prev.resets_at is still in the future at *current*.captured_at
+          → SHIFT (Anthropic moved the goalpost mid-period), inherit prev.period_start_at
+        - resets_at changed AND prev.resets_at <= current.captured_at
+          → RESET (the old deadline fired between prev and now), period_start_at = prev.resets_at
+        - no prior data → fallback to resets_at − default-period
+
+        The reset/shift distinction must compare prev.resets_at with *current*.captured_at,
+        not prev.captured_at — at prev.captured_at the deadline was always in the future
+        (otherwise prev wouldn't have observed it as the active resets_at).
+        """
+        if not resets_at:
+            return None
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT q.resets_at, q.period_start_at, s.captured_at
+            FROM quotas q
+            JOIN snapshots s ON s.id = q.snapshot_id
+            WHERE q.quota_type = ?
+              AND ((q.model IS NULL AND ? IS NULL) OR q.model = ?)
+              AND s.captured_at < ?
+              AND q.resets_at IS NOT NULL
+            ORDER BY s.captured_at DESC
+            LIMIT 1
+        """, (quota_type, model, model, captured_at))
+        prev = cursor.fetchone()
+
+        fallback_hours = _DEFAULT_PERIOD_HOURS.get(quota_type, 168)
+        fallback = resets_at - timedelta(hours=fallback_hours)
+
+        if not prev:
+            return fallback
+
+        prev_resets_at = self._parse_dt(prev['resets_at'])
+        prev_period_start_at = self._parse_dt(prev['period_start_at'])
+
+        if prev_resets_at is None:
+            return fallback
+
+        # Same reset (within tolerance) → inherit
+        delta = abs((prev_resets_at - resets_at).total_seconds())
+        if delta <= _RESET_EQUIVALENCE_SECONDS:
+            return prev_period_start_at if prev_period_start_at else fallback
+
+        # Different reset: has the previous deadline already passed by now?
+        if prev_resets_at <= captured_at:
+            # RESET: prev deadline fired. But if there's a long gap (multiple
+            # missed resets), prev.resets_at is older than one full period before
+            # the current reset — clamp to fallback so period_start_at represents
+            # the *most recent* period boundary rather than an ancient one.
+            return max(prev_resets_at, fallback)
+
+        # SHIFT: prev deadline still in the future, period continues with new end
+        return prev_period_start_at if prev_period_start_at else fallback
+
+    @staticmethod
+    def _parse_dt(value) -> Optional[datetime]:
+        """Parse a SQLite DATETIME value (str or datetime) into a tz-aware datetime."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            try:
+                dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            except (ValueError, TypeError):
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
 
     def get_current(self) -> Optional[Dict[str, Any]]:
         """
@@ -136,7 +237,7 @@ class UsageDatabase:
         cursor.execute("""
             SELECT s.id, s.captured_at, s.account_type, s.email,
                    q.quota_type, q.model, q.percent_remaining,
-                   q.resets_at, q.time_remaining_seconds
+                   q.resets_at, q.time_remaining_seconds, q.period_start_at
             FROM snapshots s
             LEFT JOIN quotas q ON q.snapshot_id = s.id
             WHERE s.captured_at >= ?
@@ -167,7 +268,7 @@ class UsageDatabase:
         cursor = self.conn.cursor()
 
         cursor.execute("""
-            SELECT quota_type, model, percent_remaining, resets_at, time_remaining_seconds
+            SELECT quota_type, model, percent_remaining, resets_at, time_remaining_seconds, period_start_at
             FROM quotas
             WHERE snapshot_id = ?
         """, (row['id'],))
@@ -185,13 +286,13 @@ class UsageDatabase:
 
     def _quota_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """Format a quotas row (from direct SELECT or JOIN) for dashboard output."""
-        resets_at_str = None
-        if row['resets_at']:
-            try:
-                resets_at = datetime.fromisoformat(str(row['resets_at']))
-                resets_at_str = resets_at.strftime('%Y-%m-%dT%H:%M:%SZ')
-            except (ValueError, TypeError):
-                resets_at_str = str(row['resets_at'])
+        resets_at_str = self._format_iso_z(row['resets_at'])
+        period_start_at_str = None
+        try:
+            period_start_at_str = self._format_iso_z(row['period_start_at'])
+        except (IndexError, KeyError):
+            # Older row tuples may not include the column — leave as None
+            pass
 
         time_remaining_human = None
         if row['time_remaining_seconds']:
@@ -200,11 +301,25 @@ class UsageDatabase:
         data = {
             'percent_remaining': row['percent_remaining'],
             'resets_at': resets_at_str,
+            'period_start_at': period_start_at_str,
             'time_remaining_human': time_remaining_human,
         }
         if row['model']:
             data['model'] = row['model']
         return data
+
+    @staticmethod
+    def _format_iso_z(value) -> Optional[str]:
+        """Format a SQLite DATETIME value as ISO-8601 with trailing Z."""
+        if value is None:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            return str(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     @staticmethod
     def _format_timestamp(captured_at) -> str:
@@ -234,46 +349,70 @@ class UsageDatabase:
         cursor.execute("SELECT COUNT(*) FROM snapshots")
         return cursor.fetchone()[0]
 
-    def get_period_boundaries(self) -> Dict[str, List[str]]:
-        """
-        Return the chronological list of distinct resets_at values per quota_type
-        observed across the entire database. Used by the dashboard to render the
-        ideal-consumption line over the *actual* period length (which Anthropic
-        may shorten mid-week), instead of assuming a fixed 168h window.
-
-        Small fluctuations (e.g. :59 vs :00 on the same hour) coming from the
-        CLI are collapsed so the dashboard treats them as one reset.
+    def backfill_period_start_at(self) -> int:
+        """One-shot pass over all quotas chronologically per (quota_type, model),
+        applying the same shift-vs-reset heuristic used at insert time. Updates
+        every row whose `period_start_at` is NULL or differs from the recomputed
+        value. Returns the number of rows updated.
         """
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT DISTINCT quota_type, resets_at
-            FROM quotas
-            WHERE resets_at IS NOT NULL
-            ORDER BY quota_type, resets_at ASC
+            SELECT q.id, q.quota_type, q.model, q.resets_at, q.period_start_at, s.captured_at
+            FROM quotas q
+            JOIN snapshots s ON s.id = q.snapshot_id
+            ORDER BY q.quota_type ASC, COALESCE(q.model, ''), s.captured_at ASC, q.id ASC
         """)
 
-        bucket_ms = 30 * 60  # 30 min tolerance for equivalence
-        out: Dict[str, List[str]] = {}
-        last_bucket_per_type: Dict[str, int] = {}
+        prev_by_key: Dict[tuple, Dict[str, Any]] = {}
+        updates: List[tuple] = []
 
         for row in cursor.fetchall():
-            qtype = row['quota_type']
-            try:
-                dt = datetime.fromisoformat(str(row['resets_at']))
-            except (ValueError, TypeError):
-                continue
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            bucket = int(dt.timestamp() // bucket_ms)
-            prev_bucket = last_bucket_per_type.get(qtype)
-            if prev_bucket is not None and abs(bucket - prev_bucket) <= 1:
-                continue  # collapse near-duplicate resets
-            last_bucket_per_type[qtype] = bucket
-            out.setdefault(qtype, []).append(
-                dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            )
+            key = (row['quota_type'], row['model'])
+            resets_at = self._parse_dt(row['resets_at'])
+            captured_at = self._parse_dt(row['captured_at'])
+            stored_psa = self._parse_dt(row['period_start_at'])
 
-        return out
+            if resets_at is None:
+                computed = None
+            else:
+                fallback = resets_at - timedelta(
+                    hours=_DEFAULT_PERIOD_HOURS.get(row['quota_type'], 168)
+                )
+                prev = prev_by_key.get(key)
+                if not prev or prev['resets_at'] is None:
+                    computed = fallback
+                else:
+                    delta = abs((prev['resets_at'] - resets_at).total_seconds())
+                    if delta <= _RESET_EQUIVALENCE_SECONDS:
+                        computed = prev['period_start_at'] or fallback
+                    elif captured_at and prev['resets_at'] <= captured_at:
+                        # RESET: clamp to fallback to handle long capture gaps
+                        computed = max(prev['resets_at'], fallback)
+                    else:
+                        # SHIFT: previous deadline still in future at this capture
+                        computed = prev['period_start_at'] or fallback
+
+            if computed != stored_psa:
+                updates.append((computed, row['id']))
+
+            # Match insert-time SELECT which filters `q.resets_at IS NOT NULL`:
+            # rows without a known reset must not displace the last valid prev,
+            # otherwise a (valid → NULL → shifted-valid) sequence would lose the
+            # earlier shift information and recompute period_start from fallback.
+            if resets_at is not None:
+                prev_by_key[key] = {
+                    'resets_at': resets_at,
+                    'captured_at': captured_at,
+                    'period_start_at': computed,
+                }
+
+        if updates:
+            cursor.executemany(
+                "UPDATE quotas SET period_start_at = ? WHERE id = ?",
+                updates,
+            )
+            self.conn.commit()
+        return len(updates)
 
     def close(self):
         """Close database connection."""

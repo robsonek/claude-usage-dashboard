@@ -164,6 +164,28 @@ Generate a secure secret key with:
 python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
+## Upgrading an Existing Deployment
+
+The `quotas.period_start_at` column is added automatically on app startup,
+but historical rows are left at NULL. Without backfill, the chart's Target
+line and reset markers will only render correctly for snapshots captured
+*after* the upgrade. Run the one-shot backfill once to populate older
+rows using the same shift-vs-reset heuristic as live inserts:
+
+```bash
+cd ~/claude-dashboard
+venv/bin/python -c '
+from database import UsageDatabase
+import config
+db = UsageDatabase(config.DB_FILE)
+print(f"updated {db.backfill_period_start_at()} rows")
+'
+```
+
+The script is idempotent — re-running it is a no-op once everything is
+consistent. Back up `usage.db` first if the deployment carries data you
+cannot afford to lose.
+
 ## Management Commands
 
 ```bash

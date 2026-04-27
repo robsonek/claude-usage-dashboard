@@ -216,10 +216,18 @@ def parse_relative_time(text: str) -> Optional[int]:
 
 
 def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
-    """Parse reset time from lines. Searches up to 14 lines, stops at quota boundaries."""
-    # Find end index - either 14 lines or until we hit a quota boundary
+    """Parse reset time from lines after the % line, bounded to the current section.
+
+    A section ends at the first blank line or known quota-boundary header. Without
+    the blank-line stop, a quota with no own Resets line (e.g. `Current week
+    (Sonnet only)` shows just `0% used` and no reset row) would leak the Resets
+    text from the next section (e.g. `Extra usage` with `$X / $Y spent · Resets May 1`).
+    """
     end_idx = min(start_idx + 14, len(lines))
     for i in range(start_idx + 1, end_idx):
+        if not lines[i].strip():
+            end_idx = i
+            break
         line_lower = lines[i].lower()
         for boundary in QUOTA_BOUNDARIES:
             if boundary in line_lower:

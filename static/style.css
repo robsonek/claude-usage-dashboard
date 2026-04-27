@@ -18,6 +18,7 @@
     --accent-red-hover: rgba(231, 76, 60, 0.3);
     --btn-blue-bg: rgba(52, 152, 219, 0.2);
     --btn-red-bg: rgba(231, 76, 60, 0.2);
+    --reset-marker-color: rgba(220, 220, 220, 0.45);
 }
 
 /* Light Mode */
@@ -40,6 +41,7 @@
     --accent-red-hover: rgba(231, 76, 60, 0.2);
     --btn-blue-bg: rgba(52, 152, 219, 0.15);
     --btn-red-bg: rgba(231, 76, 60, 0.15);
+    --reset-marker-color: rgba(60, 60, 60, 0.45);
 }
 
 /* Reset and base */

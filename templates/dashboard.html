@@ -119,47 +119,64 @@
     </div>
 
     <script>
-        // Period metadata for charts (for calculating target value in tooltips)
-        const chartPeriodData = {
-            weekly: { resetAt: null, periodHours: 168 },
-            session: { resetAt: null, periodHours: 5 },
-            model: { resetAt: null, periodHours: 168 }
-        };
+        // Custom plugin: draw vertical dotted lines at period boundaries.
+        // Reads `chart.options.plugins.resetMarkers.lines` — array of ISO timestamps.
+        // Lines outside the plot area are clipped automatically.
+        const resetMarkersPlugin = {
+            id: 'resetMarkers',
+            afterDraw(chart) {
+                // Read straight from a chart-instance property — bypasses Chart.js's
+                // scriptable-option proxy, which wraps options.plugins.* values
+                // and would hide our plain `{lines: [...]}` from a direct read.
+                const lines = chart.$resetMarkerLines;
+                if (!Array.isArray(lines) || lines.length === 0) return;
+                const { ctx, chartArea, scales } = chart;
+                const xScale = scales.x;
+                if (!xScale) return;
 
-        // Maps normalized reset timestamp -> previous reset timestamp (period start).
-        // Populated from /api/periods so we can render the ideal line over the
-        // actual period length even when Anthropic shortens a weekly cycle.
-        const periodStartByReset = {
-            weekly: new Map(),
-            session: new Map(),
-            model_specific: new Map()
-        };
+                const color = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--reset-marker-color').trim() || 'rgba(128,128,128,0.45)';
 
-        // Bucket resets to 30-min granularity to ignore the :59 / :00 fluctuation
-        // that the Claude CLI sometimes reports for the same reset instant.
-        function normalizeResetKey(resetIso) {
-            if (!resetIso) return null;
-            const ms = new Date(resetIso).getTime();
-            if (Number.isNaN(ms)) return null;
-            return Math.round(ms / (30 * 60 * 1000));
-        }
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(chartArea.left, chartArea.top,
+                         chartArea.right - chartArea.left,
+                         chartArea.bottom - chartArea.top);
+                ctx.clip();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 3]);
 
-        async function fetchPeriodBoundaries() {
-            try {
-                const res = await fetch('/api/periods');
-                const data = await res.json();
-                for (const qtype of ['weekly', 'session', 'model_specific']) {
-                    const list = Array.isArray(data[qtype]) ? data[qtype] : [];
-                    const map = new Map();
-                    for (let i = 1; i < list.length; i++) {
-                        const key = normalizeResetKey(list[i]);
-                        if (key !== null) map.set(key, list[i - 1]);
-                    }
-                    periodStartByReset[qtype] = map;
+                for (const iso of lines) {
+                    const ts = new Date(iso).getTime();
+                    if (Number.isNaN(ts)) continue;
+                    const x = xScale.getPixelForValue(ts);
+                    if (x < chartArea.left || x > chartArea.right) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(x, chartArea.top);
+                    ctx.lineTo(x, chartArea.bottom);
+                    ctx.stroke();
                 }
-            } catch (error) {
-                console.error('Error loading period boundaries:', error);
+                ctx.restore();
             }
+        };
+        Chart.register(resetMarkersPlugin);
+
+        // Extract distinct period boundaries from a dataset's points.
+        // Each point carries periodStartAt (frozen at insert time); a *change*
+        // between consecutive points is a real reset that fired in-window.
+        function extractResetMarkers(data) {
+            if (!Array.isArray(data) || data.length === 0) return [];
+            const out = [];
+            let prev = null;
+            for (const p of data) {
+                if (!p.periodStartAt) continue;
+                if (p.periodStartAt !== prev) {
+                    if (prev !== null) out.push(p.periodStartAt);
+                    prev = p.periodStartAt;
+                }
+            }
+            return out;
         }
 
         // Chart configuration
@@ -335,7 +352,6 @@
                 const [historyRes, currentRes] = await Promise.all([
                     fetch(`/api/history?hours=${currentTimeRange}`),
                     fetch('/api/current'),
-                    fetchPeriodBoundaries()
                 ]);
                 const history = await historyRes.json();
                 const current = await currentRes.json();
@@ -357,49 +373,44 @@
                         weeklyData.push({
                             x: timestamp,
                             y: 100 - (limits.weekly.percent_remaining || 0),
-                            resetAt: limits.weekly.resets_at
+                            resetAt: limits.weekly.resets_at,
+                            periodStartAt: limits.weekly.period_start_at
                         });
                     }
                     if (limits.session) {
                         sessionData.push({
                             x: timestamp,
                             y: 100 - (limits.session.percent_remaining || 0),
-                            resetAt: limits.session.resets_at
+                            resetAt: limits.session.resets_at,
+                            periodStartAt: limits.session.period_start_at
                         });
                     }
                     if (limits.model_specific) {
                         modelData.push({
                             x: timestamp,
                             y: 100 - (limits.model_specific.percent_remaining || 0),
-                            resetAt: limits.model_specific.resets_at
+                            resetAt: limits.model_specific.resets_at,
+                            periodStartAt: limits.model_specific.period_start_at
                         });
                     }
                 });
 
-                // Get reset times from current data
-                const limits = current.limits || {};
-                const weeklyReset = limits.weekly?.resets_at;
-                const sessionReset = limits.session?.resets_at;
-                const modelReset = limits.model_specific?.resets_at;
-
-                // Save period data for tooltips
-                chartPeriodData.weekly.resetAt = weeklyReset;
-                chartPeriodData.session.resetAt = sessionReset;
-                chartPeriodData.model.resetAt = modelReset;
-
-                // Update chart data
-                // Fallback period hours are used only when the DB has no earlier
-                // reset for a given resets_at (e.g. first period ever recorded).
+                // Update chart data — each point carries its own periodStartAt frozen
+                // at insert time, so the ideal line is rendered correctly regardless
+                // of later DB changes (mid-period shortenings, etc.).
                 chartWeekly.data.datasets[0].data = weeklyData;
-                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168, 'weekly');
+                chartWeekly.data.datasets[1].data = calculateIdealLine(weeklyData, 168);
+                chartWeekly.$resetMarkerLines = extractResetMarkers(weeklyData);
                 chartWeekly.update();
 
                 chartSession.data.datasets[0].data = sessionData;
-                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5, 'session');
+                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5);
+                chartSession.$resetMarkerLines = extractResetMarkers(sessionData);
                 chartSession.update();
 
                 chartModel.data.datasets[0].data = modelData;
-                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168, 'model_specific');
+                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168);
+                chartModel.$resetMarkerLines = extractResetMarkers(modelData);
                 chartModel.update();
             } catch (error) {
                 console.error('Error loading history:', error);
@@ -441,34 +452,47 @@
         }
 
         // Calculate ideal usage line (even consumption from 0% at period start
-        // to 100% at reset). Each data point carries its own `resetAt`; we look
-        // up the matching previous reset from /api/periods to use the *actual*
-        // period length. Fallback to `fallbackPeriodHours` only when no prior
-        // reset is recorded (e.g. first period ever captured).
-        function calculateIdealLine(data, fallbackPeriodHours, quotaType) {
+        // to 100% at reset). Each point carries `periodStartAt` frozen at insert
+        // time using the shift-vs-reset heuristic, so the line is correct even
+        // when Anthropic shortens a period mid-cycle. Fallback to
+        // `fallbackPeriodHours` only when the snapshot pre-dates that column.
+        function calculateIdealLine(data, fallbackPeriodHours) {
             if (data.length < 1) return [];
 
             const fallbackMs = fallbackPeriodHours * 60 * 60 * 1000;
-            const startMap = periodStartByReset[quotaType] || new Map();
+            const out = [];
+            let prevPeriodStart = null;
 
-            return data.map(point => {
-                if (!point.resetAt) return { x: point.x, y: null };
+            for (const point of data) {
+                if (!point.resetAt) {
+                    out.push({ x: point.x, y: null });
+                    prevPeriodStart = null;
+                    continue;
+                }
 
                 const pointTime = point.x.getTime();
                 const resetMs = new Date(point.resetAt).getTime();
-                const key = normalizeResetKey(point.resetAt);
-
-                const prevResetIso = startMap.get(key);
-                const periodStartMs = prevResetIso
-                    ? new Date(prevResetIso).getTime()
+                const periodStartMs = point.periodStartAt
+                    ? new Date(point.periodStartAt).getTime()
                     : resetMs - fallbackMs;
 
-                const periodMs = resetMs - periodStartMs;
-                if (periodMs <= 0) return { x: point.x, y: null };
+                if (resetMs - periodStartMs <= 0) {
+                    out.push({ x: point.x, y: null });
+                    prevPeriodStart = null;
+                    continue;
+                }
 
-                const ideal = ((pointTime - periodStartMs) / periodMs) * 100;
-                return { x: point.x, y: Math.max(0, Math.min(ideal, 100)) };
-            });
+                // Break the line at period boundaries so the Target dataset doesn't
+                // get drawn as a vertical drop from 100% to 0% across a reset.
+                if (prevPeriodStart !== null && prevPeriodStart !== periodStartMs) {
+                    out.push({ x: point.x, y: null });
+                }
+
+                const ideal = ((pointTime - periodStartMs) / (resetMs - periodStartMs)) * 100;
+                out.push({ x: point.x, y: Math.max(0, Math.min(ideal, 100)) });
+                prevPeriodStart = periodStartMs;
+            }
+            return out;
         }
 
         // Update predictions
