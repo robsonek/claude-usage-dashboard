@@ -268,7 +268,7 @@
                 data: {
                     datasets: [
                         { label: 'Usage', borderColor: '#3498db', backgroundColor: 'rgba(52, 152, 219, 0.1)', fill: true, data: [] },
-                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [] }
+                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
             });
@@ -278,7 +278,7 @@
                 data: {
                     datasets: [
                         { label: 'Usage', borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', fill: true, data: [] },
-                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [] }
+                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
             });
@@ -288,7 +288,7 @@
                 data: {
                     datasets: [
                         { label: 'Usage', borderColor: '#9b59b6', backgroundColor: 'rgba(155, 89, 182, 0.1)', fill: true, data: [] },
-                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [] }
+                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
             });
@@ -456,17 +456,18 @@
         // time using the shift-vs-reset heuristic, so the line is correct even
         // when Anthropic shortens a period mid-cycle. Fallback to
         // `fallbackPeriodHours` only when the snapshot pre-dates that column.
+        // Output keeps 1:1 index alignment with the input — segments crossing
+        // a period boundary are hidden via `segment.borderColor`, not by
+        // inserting extra null entries.
         function calculateIdealLine(data, fallbackPeriodHours) {
             if (data.length < 1) return [];
 
             const fallbackMs = fallbackPeriodHours * 60 * 60 * 1000;
             const out = [];
-            let prevPeriodStart = null;
 
             for (const point of data) {
                 if (!point.resetAt) {
-                    out.push({ x: point.x, y: null });
-                    prevPeriodStart = null;
+                    out.push({ x: point.x, y: null, periodStart: null });
                     continue;
                 }
 
@@ -477,23 +478,33 @@
                     : resetMs - fallbackMs;
 
                 if (resetMs - periodStartMs <= 0) {
-                    out.push({ x: point.x, y: null });
-                    prevPeriodStart = null;
+                    out.push({ x: point.x, y: null, periodStart: null });
                     continue;
                 }
 
-                // Break the line at period boundaries so the Target dataset doesn't
-                // get drawn as a vertical drop from 100% to 0% across a reset.
-                if (prevPeriodStart !== null && prevPeriodStart !== periodStartMs) {
-                    out.push({ x: point.x, y: null });
-                }
-
                 const ideal = ((pointTime - periodStartMs) / (resetMs - periodStartMs)) * 100;
-                out.push({ x: point.x, y: Math.max(0, Math.min(ideal, 100)) });
-                prevPeriodStart = periodStartMs;
+                out.push({
+                    x: point.x,
+                    y: Math.max(0, Math.min(ideal, 100)),
+                    periodStart: periodStartMs
+                });
             }
             return out;
         }
+
+        // Hide segments crossing a period boundary so the Target line doesn't
+        // get drawn as a vertical drop from 100% to 0% across a reset.
+        const targetSegment = {
+            borderColor: ctx => {
+                const ds = ctx.chart.data.datasets[ctx.datasetIndex];
+                const p0 = ds.data[ctx.p0DataIndex];
+                const p1 = ds.data[ctx.p1DataIndex];
+                if (p0 && p1 && p0.periodStart !== p1.periodStart) {
+                    return 'transparent';
+                }
+                return undefined;
+            }
+        };
 
         // Update predictions
         async function updatePredictions() {
