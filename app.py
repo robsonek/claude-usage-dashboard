@@ -13,6 +13,22 @@ from database import UsageDatabase
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 app.permanent_session_lifetime = timedelta(hours=config.SESSION_LIFETIME_HOURS)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    # Set SESSION_COOKIE_SECURE=1 in production (HTTPS); off by default so local
+    # HTTP development still receives the session cookie.
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '0') == '1',
+)
+
+# Fail closed: refuse to serve with the built-in default secret/password unless
+# explicitly allowed for local dev. This guard lives in the web app only — the
+# collector (which imports config for paths/CLAUDE_BIN) is unaffected.
+if (config.SECRET_KEY_IS_DEFAULT or config.PASSWORD_IS_DEFAULT) and \
+        os.environ.get('ALLOW_DEFAULT_CREDENTIALS') != '1':
+    raise RuntimeError(
+        "Refusing to start with default FLASK_SECRET_KEY / DASHBOARD_PASSWORD. "
+        "Set both environment variables (or ALLOW_DEFAULT_CREDENTIALS=1 for local dev).")
 
 # Global database instance
 _db = None
