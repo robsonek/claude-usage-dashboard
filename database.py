@@ -5,6 +5,23 @@ from typing import Optional, Dict, Any, List
 import os
 
 
+def _adapt_datetime_utc(dt: datetime) -> str:
+    """Serialize datetimes to a canonical UTC string for SQLite.
+
+    The implicit default datetime adapter is deprecated since Python 3.12 (slated
+    for removal); register an explicit one. Output matches the existing on-disk
+    format ('YYYY-MM-DD HH:MM:SS[.ffffff]+00:00'), and naive values are assumed
+    UTC and normalized — so mixed naive/aware rows can no longer make get_history's
+    lexicographic range filter compare inconsistently. No data migration needed.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(sep=' ')
+
+
+sqlite3.register_adapter(datetime, _adapt_datetime_utc)
+
+
 # Default period length per quota type when bootstrapping period_start_at
 # without prior history. After one full period the heuristic uses observed boundaries.
 _DEFAULT_PERIOD_HOURS = {
@@ -16,6 +33,15 @@ _DEFAULT_PERIOD_HOURS = {
 # Resets within this many seconds of each other are considered "the same"
 # (handles claude /usage's :59 vs :00 fluctuation for the same reset instant).
 _RESET_EQUIVALENCE_SECONDS = 1800
+
+# A reading whose resets_at lands further than the quota's period (plus this
+# margin) ahead of captured_at is a transient glitch — observed as claude
+# /usage briefly reporting the reset +24h at the boundary (a date-rollover
+# artifact). A fresh reset never pushes resets_at more than one period ahead,
+# so anything beyond that is untrustworthy. If trusted, a single such reading
+# poisons the reset/shift classification of the *next* snapshot and freezes
+# period_start_at for the whole following period.
+_RESETS_AHEAD_MARGIN_HOURS = 1
 
 
 class UsageDatabase:
@@ -74,13 +100,13 @@ class UsageDatabase:
         """
         cursor = self.conn.cursor()
 
-        captured_at = data.get('captured_at', datetime.now().isoformat())
+        captured_at = data.get('captured_at', datetime.now(timezone.utc).isoformat())
         if isinstance(captured_at, str):
             captured_at = captured_at.replace('Z', '+00:00')
             try:
                 captured_at = datetime.fromisoformat(captured_at)
             except ValueError:
-                captured_at = datetime.now()
+                captured_at = datetime.now(timezone.utc)
 
         cursor.execute("""
             INSERT INTO snapshots (captured_at, account_type, email)
@@ -97,6 +123,21 @@ class UsageDatabase:
                     resets_at = datetime.fromisoformat(resets_at)
                 except ValueError:
                     resets_at = None
+
+            # Reject a glitched reading (resets_at implausibly far ahead) by
+            # carrying forward the previous good reset instant, so it can't
+            # poison this row's period_start nor the next snapshot's classification.
+            if resets_at is not None and not self._resets_at_is_plausible(
+                    quota.get('type'), captured_at, resets_at):
+                carried = self._prev_resets_at(
+                    quota.get('type'), quota.get('model'), captured_at)
+                if carried is not None:
+                    resets_at = carried
+                else:
+                    # No prior good value (fresh DB / first per-model row): clamp the
+                    # glitch to one period ahead instead of storing the raw +24h.
+                    period_hours = _DEFAULT_PERIOD_HOURS.get(quota.get('type'), 168)
+                    resets_at = captured_at + timedelta(hours=period_hours)
 
             period_start_at = self._compute_period_start_at(
                 quota.get('type'), quota.get('model'), captured_at, resets_at
@@ -195,6 +236,38 @@ class UsageDatabase:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
+
+    @staticmethod
+    def _resets_at_is_plausible(quota_type: Optional[str], captured_at: datetime,
+                                resets_at: datetime) -> bool:
+        """True unless resets_at lands implausibly far in the future for this
+        quota — i.e. more than one period (+margin) ahead of captured_at. Such a
+        value is a transient glitch (see _RESETS_AHEAD_MARGIN_HOURS)."""
+        if resets_at is None or captured_at is None:
+            return True
+        period_hours = _DEFAULT_PERIOD_HOURS.get(quota_type, 168)
+        horizon = timedelta(hours=period_hours + _RESETS_AHEAD_MARGIN_HOURS)
+        return (resets_at - captured_at) <= horizon
+
+    def _prev_resets_at(self, quota_type: Optional[str], model: Optional[str],
+                        captured_at: datetime) -> Optional[datetime]:
+        """The most recent stored resets_at for this quota before captured_at.
+        Values stored going forward are already sanitized, so this is a known
+        good reset instant to carry forward when the current reading glitches."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT q.resets_at
+            FROM quotas q
+            JOIN snapshots s ON s.id = q.snapshot_id
+            WHERE q.quota_type = ?
+              AND ((q.model IS NULL AND ? IS NULL) OR q.model = ?)
+              AND s.captured_at < ?
+              AND q.resets_at IS NOT NULL
+            ORDER BY s.captured_at DESC
+            LIMIT 1
+        """, (quota_type, model, model, captured_at))
+        row = cursor.fetchone()
+        return self._parse_dt(row['resets_at']) if row else None
 
     def get_current(self) -> Optional[Dict[str, Any]]:
         """
@@ -349,11 +422,16 @@ class UsageDatabase:
         cursor.execute("SELECT COUNT(*) FROM snapshots")
         return cursor.fetchone()[0]
 
-    def backfill_period_start_at(self) -> int:
+    def backfill_period_start_at(self) -> Dict[str, int]:
         """One-shot pass over all quotas chronologically per (quota_type, model),
-        applying the same shift-vs-reset heuristic used at insert time. Updates
-        every row whose `period_start_at` is NULL or differs from the recomputed
-        value. Returns the number of rows updated.
+        applying the same glitch-sanitization and shift-vs-reset heuristic used at
+        insert time. Repairs two columns where the recomputed value differs from
+        what is stored:
+          - `resets_at`: a glitched reading (implausibly far ahead) is replaced
+            with the carried-forward previous good reset instant.
+          - `period_start_at`: recomputed from the (sanitized) resets_at.
+
+        Returns {'period_start_updates': N, 'resets_at_sanitized': M}.
         """
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -364,13 +442,28 @@ class UsageDatabase:
         """)
 
         prev_by_key: Dict[tuple, Dict[str, Any]] = {}
-        updates: List[tuple] = []
+        psa_updates: List[tuple] = []
+        resets_updates: List[tuple] = []
 
         for row in cursor.fetchall():
             key = (row['quota_type'], row['model'])
-            resets_at = self._parse_dt(row['resets_at'])
+            stored_resets = self._parse_dt(row['resets_at'])
             captured_at = self._parse_dt(row['captured_at'])
             stored_psa = self._parse_dt(row['period_start_at'])
+
+            # Sanitize a glitched resets_at by carrying forward the previous good
+            # value, so it neither corrupts this row's period_start nor poisons
+            # the next row's reset/shift classification.
+            resets_at = stored_resets
+            prev = prev_by_key.get(key)
+            if (resets_at is not None and captured_at is not None
+                    and not self._resets_at_is_plausible(row['quota_type'], captured_at, resets_at)):
+                if prev and prev['resets_at'] is not None:
+                    resets_at = prev['resets_at']
+                else:
+                    # No prior good value to carry forward: clamp to one period ahead.
+                    period_hours = _DEFAULT_PERIOD_HOURS.get(row['quota_type'], 168)
+                    resets_at = captured_at + timedelta(hours=period_hours)
 
             if resets_at is None:
                 computed = None
@@ -378,7 +471,6 @@ class UsageDatabase:
                 fallback = resets_at - timedelta(
                     hours=_DEFAULT_PERIOD_HOURS.get(row['quota_type'], 168)
                 )
-                prev = prev_by_key.get(key)
                 if not prev or prev['resets_at'] is None:
                     computed = fallback
                 else:
@@ -393,7 +485,9 @@ class UsageDatabase:
                         computed = prev['period_start_at'] or fallback
 
             if computed != stored_psa:
-                updates.append((computed, row['id']))
+                psa_updates.append((computed, row['id']))
+            if resets_at != stored_resets:
+                resets_updates.append((resets_at, row['id']))
 
             # Match insert-time SELECT which filters `q.resets_at IS NOT NULL`:
             # rows without a known reset must not displace the last valid prev,
@@ -406,13 +500,22 @@ class UsageDatabase:
                     'period_start_at': computed,
                 }
 
-        if updates:
+        if resets_updates:
+            cursor.executemany(
+                "UPDATE quotas SET resets_at = ? WHERE id = ?",
+                resets_updates,
+            )
+        if psa_updates:
             cursor.executemany(
                 "UPDATE quotas SET period_start_at = ? WHERE id = ?",
-                updates,
+                psa_updates,
             )
+        if resets_updates or psa_updates:
             self.conn.commit()
-        return len(updates)
+        return {
+            'period_start_updates': len(psa_updates),
+            'resets_at_sanitized': len(resets_updates),
+        }
 
     def close(self):
         """Close database connection."""
