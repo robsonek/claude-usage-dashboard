@@ -25,9 +25,8 @@ def main():
         sys.exit(0)
 
     try:
-        db = UsageDatabase(config.DB_FILE)
-        snapshot_id = db.insert_snapshot(data)
-        db.close()
+        with UsageDatabase(config.DB_FILE) as db:
+            db.insert_snapshot(data)
     except Exception as e:
         print(f"Database error: {e}", file=sys.stderr)
         sys.exit(1)

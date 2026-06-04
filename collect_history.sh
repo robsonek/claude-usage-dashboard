@@ -19,6 +19,14 @@ if [ ! -x "$VENV_PYTHON" ]; then
     exit 1
 fi
 
+# Skip if a previous run is still going (a slow /usage fetch shouldn't overlap the
+# next 5-min tick and double-insert). Lock lives under data/ (gitignored).
+exec 9>"$DATA_DIR/.collect.lock"
+if ! flock -n 9; then
+    log "WARN: another collection run is in progress, skipping"
+    exit 0
+fi
+
 # Fetch data using usage_fetcher.py — stderr goes to the cron log, not /dev/null.
 # CLAUDE_USAGE_RAW_DIR: fetcher dumps raw PTY bytes here only for incomplete/glitched
 # readings, so we can diagnose what went wrong after the fact.
@@ -43,8 +51,10 @@ elif echo "$USAGE_JSON" | grep -q '"quotas": \[\]'; then
     log "WARN: fetcher returned empty quotas"
 fi
 
-# Save to JSON file (history / reproducibility)
-echo "$USAGE_JSON" > "$DAY_DIR/$TIME.json"
+# Save to JSON file (history / reproducibility) — write atomically so a crash or
+# overlap can't leave a half-written/corrupt file.
+TMP_JSON="$DAY_DIR/.$TIME.$$.json"
+printf '%s\n' "$USAGE_JSON" > "$TMP_JSON" && mv -f "$TMP_JSON" "$DAY_DIR/$TIME.json"
 
 # Save to SQLite database (insert_to_db.py skips pure-error records itself)
 if ! echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py"; then

@@ -364,23 +364,6 @@ def parse_reset_time(lines: List[str], start_idx: int, quota_type: Optional[str]
     return reset_text, reset_time, duration_seconds
 
 
-def format_duration(seconds: int) -> str:
-    """Format seconds as human-readable text."""
-    days = seconds // 86400
-    hours = (seconds % 86400) // 3600
-    minutes = (seconds % 3600) // 60
-
-    parts = []
-    if days > 0:
-        parts.append(f"{days}d")
-    if hours > 0:
-        parts.append(f"{hours}h")
-    if minutes > 0:
-        parts.append(f"{minutes}m")
-
-    return ' '.join(parts) if parts else '0m'
-
-
 def parse_quotas(text: str) -> List[Dict[str, Any]]:
     """Parse limits from claude /usage output."""
     text = text.replace('\r\n', '\n').replace('\r', '\n')
@@ -414,9 +397,10 @@ def parse_quotas(text: str) -> List[Dict[str, Any]]:
                             if reset_text:
                                 quota['reset_text'] = reset_text
 
-                            if duration_seconds:
-                                quota['time_remaining_seconds'] = duration_seconds
-                                quota['time_remaining_human'] = format_duration(duration_seconds)
+                            if duration_seconds is not None:
+                                # Keep 0 ("resets now"); clamp negatives so a stale
+                                # just-passed reset doesn't show a negative countdown.
+                                quota['time_remaining_seconds'] = max(0, duration_seconds)
 
                             quotas.append(quota)
                         except Exception:
