@@ -35,3 +35,11 @@ def test_dashboard_has_freshness_indicator():
     assert 'id="freshness"' in html
     assert 'id="fresh-text"' in html
     assert "updateFreshness" in html
+
+
+def test_status_cards_have_value_and_trend_hooks():
+    html = _read("templates/dashboard.html")
+    for hook in ('id="weekly-used"', 'id="session-used"', 'id="model-used"',
+                 'id="weekly-trend"', 'id="session-trend"', 'id="model-trend"',
+                 'id="card-weekly"', 'id="card-session"', 'id="card-model"'):
+        assert hook in html, f"missing {hook}"

@@ -26,36 +26,48 @@
         <!-- Current status cards -->
         <div class="section-label">Status</div>
         <section class="current-status">
-            <div class="status-card weekly">
-                <h3>Weekly Limit</h3>
+            <div class="status-card" id="card-weekly">
+                <div class="status-head">
+                    <span class="status-name"><span class="dot"></span>Weekly · 168h</span>
+                    <span class="status-trend" id="weekly-trend"></span>
+                </div>
+                <div class="status-value"><span id="weekly-used">--</span><span class="u">% used</span></div>
                 <div class="progress-container">
                     <div class="progress-bar" id="weekly-progress"></div>
                 </div>
                 <div class="status-details">
                     <span class="remaining" id="weekly-remaining">--</span>
-                    <span class="reset-time" id="weekly-reset">Reset: --</span>
+                    <span class="reset-time" id="weekly-reset">reset --</span>
                 </div>
             </div>
 
-            <div class="status-card daily">
-                <h3>Session (5h)</h3>
+            <div class="status-card" id="card-session">
+                <div class="status-head">
+                    <span class="status-name"><span class="dot"></span>Session · 5h</span>
+                    <span class="status-trend" id="session-trend"></span>
+                </div>
+                <div class="status-value"><span id="session-used">--</span><span class="u">% used</span></div>
                 <div class="progress-container">
                     <div class="progress-bar" id="session-progress"></div>
                 </div>
                 <div class="status-details">
                     <span class="remaining" id="session-remaining">--</span>
-                    <span class="reset-time" id="session-reset">Reset: --</span>
+                    <span class="reset-time" id="session-reset">reset --</span>
                 </div>
             </div>
 
-            <div class="status-card model">
-                <h3 id="model-title">Model Specific</h3>
+            <div class="status-card" id="card-model">
+                <div class="status-head">
+                    <span class="status-name"><span class="dot"></span><span id="model-title">Sonnet · 168h</span></span>
+                    <span class="status-trend" id="model-trend"></span>
+                </div>
+                <div class="status-value"><span id="model-used">--</span><span class="u">% used</span></div>
                 <div class="progress-container">
                     <div class="progress-bar" id="model-progress"></div>
                 </div>
                 <div class="status-details">
                     <span class="remaining" id="model-remaining">--</span>
-                    <span class="reset-time" id="model-reset">Reset: --</span>
+                    <span class="reset-time" id="model-reset">reset --</span>
                 </div>
             </div>
         </section>
@@ -290,7 +302,21 @@
             });
         }
 
-        // Update current status
+        // Fill one status card. `used` drives the big number, the bar width/color
+        // (via getProgressClass), the card class (colors the dot), and "% left".
+        function setStatusCard(prefix, cardId, q) {
+            if (!q) return;
+            const used = 100 - (q.percent_remaining || 0);
+            const cls = getProgressClass(used);
+            document.getElementById(cardId).className = 'status-card ' + cls;
+            document.getElementById(prefix + '-used').textContent = used.toFixed(1);
+            const bar = document.getElementById(prefix + '-progress');
+            bar.style.width = used + '%';
+            bar.className = 'progress-bar ' + cls;
+            document.getElementById(prefix + '-remaining').textContent = (100 - used).toFixed(1) + '% left';
+            document.getElementById(prefix + '-reset').textContent = 'reset ' + formatDate(q.resets_at);
+        }
+
         async function updateCurrentStatus() {
             try {
                 const response = await fetch('/api/current');
@@ -304,34 +330,14 @@
 
                 const limits = data.limits || {};
 
-                // Weekly
-                if (limits.weekly) {
-                    const used = 100 - (limits.weekly.percent_remaining || 0);
-                    document.getElementById('weekly-progress').style.width = used + '%';
-                    document.getElementById('weekly-progress').className = 'progress-bar ' + getProgressClass(used);
-                    document.getElementById('weekly-remaining').textContent = `${used.toFixed(1)}% used`;
-                    document.getElementById('weekly-reset').textContent = `Reset: ${formatDate(limits.weekly.resets_at)}`;
-                }
+                setStatusCard('weekly', 'card-weekly', limits.weekly);
+                setStatusCard('session', 'card-session', limits.session);
 
-                // Daily
-                if (limits.session) {
-                    const used = 100 - (limits.session.percent_remaining || 0);
-                    document.getElementById('session-progress').style.width = used + '%';
-                    document.getElementById('session-progress').className = 'progress-bar ' + getProgressClass(used);
-                    document.getElementById('session-remaining').textContent = `${used.toFixed(1)}% used`;
-                    document.getElementById('session-reset').textContent = `Reset: ${formatDate(limits.session.resets_at)}`;
-                }
-
-                // Model specific
                 if (limits.model_specific) {
-                    const used = 100 - (limits.model_specific.percent_remaining || 0);
                     const m = limits.model_specific.model;
                     document.getElementById('model-title').textContent =
-                        m ? `Model Specific (${m.charAt(0).toUpperCase() + m.slice(1)})` : 'Model Specific';
-                    document.getElementById('model-progress').style.width = used + '%';
-                    document.getElementById('model-progress').className = 'progress-bar ' + getProgressClass(used);
-                    document.getElementById('model-remaining').textContent = `${used.toFixed(1)}% used`;
-                    document.getElementById('model-reset').textContent = `Reset: ${formatDate(limits.model_specific.resets_at)}`;
+                        (m ? m.charAt(0).toUpperCase() + m.slice(1) : 'Model') + ' · 168h';
+                    setStatusCard('model', 'card-model', limits.model_specific);
                 }
 
                 document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
@@ -479,9 +485,28 @@
                 updatePredictionCard('prediction-weekly', predictions.weekly);
                 updatePredictionCard('prediction-session', predictions.session);
                 updatePredictionCard('prediction-model', predictions.model_specific);
+
+                setStatusTrend('weekly-trend', predictions.weekly);
+                setStatusTrend('session-trend', predictions.session);
+                setStatusTrend('model-trend', predictions.model_specific);
             } catch (error) {
                 console.error('Error loading predictions:', error);
             }
+        }
+
+        // Mirror the prediction trend onto the matching status card. Hidden when
+        // there's no usable trend (collecting / stale / null) to avoid noise.
+        function setStatusTrend(elId, prediction) {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            if (!prediction || prediction.stale_data || prediction.low_confidence
+                || prediction.trend_per_hour === null || prediction.trend_per_hour === undefined) {
+                el.textContent = '';
+                return;
+            }
+            const t = prediction.trend_per_hour;
+            const arrow = t > 0 ? '▲' : (t < 0 ? '▼' : '■');
+            el.textContent = `${arrow} ${Math.abs(t)}%/h`;
         }
 
         function updatePredictionCard(elementId, prediction) {
