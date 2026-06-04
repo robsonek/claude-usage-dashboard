@@ -1,11 +1,11 @@
 """Repair test: backfill_period_start_at must fix already-corrupted rows.
 
-Simulates the exact pre-fix prod state from 2026-06-04 (a glitched resets_at
-+24h, and the following genuine reset frozen at the previous period's start),
-injected via raw SQL to bypass insert-time sanitization. Verifies that the
-injected state is indeed corrupted, then that backfill repairs both columns.
+Simulates the exact pre-fix prod state from 2026-06-04 (a glitched resets_at +24h,
+and the following genuine reset frozen at the previous period's start), injected
+via raw SQL to bypass insert-time sanitization. Verifies the injected state is
+indeed corrupted, then that backfill repairs both columns.
 
-Run: python3 test_backfill_repairs_glitch.py
+Runs under pytest or standalone: python3 test_backfill_repairs_glitch.py
 """
 import os
 import tempfile
@@ -51,10 +51,9 @@ def _rows(db: UsageDatabase):
             for r in cur.fetchall()}
 
 
-def main():
+def test_backfill_repairs_glitch_episode():
     fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    os.unlink(path)
+    os.close(fd); os.unlink(path)
     db = UsageDatabase(path)
     try:
         _inject(db)
@@ -62,41 +61,36 @@ def main():
         boundary = datetime(2026, 6, 4, 5, 30, tzinfo=timezone.utc)
         reset_t = datetime(2026, 6, 4, 5, 34, 5, tzinfo=timezone.utc)
         glitch_t = datetime(2026, 6, 4, 5, 29, 6, tzinfo=timezone.utc)
+        post_t = datetime(2026, 6, 4, 5, 39, 5, tzinfo=timezone.utc)
+        early_t = datetime(2026, 6, 4, 0, 29, 6, tzinfo=timezone.utc)
 
         before = _rows(db)
-        failures = []
-
-        # sanity: injected state really is the bug
-        if before[reset_t][1] == boundary:
-            failures.append("precondition: reset pstart already correct — scenario not reproducing bug")
-        if before[glitch_t][0] == boundary:
-            failures.append("precondition: glitch resets_at already sane — scenario not reproducing bug")
+        # sanity: the injected state really is the bug
+        assert before[reset_t][1] != boundary, "precondition: reset pstart already correct"
+        assert before[glitch_t][0] != boundary, "precondition: glitch resets_at already sane"
 
         result = db.backfill_period_start_at()
 
         after = _rows(db)
-        if after[glitch_t][0] != boundary:
-            failures.append(f"glitch resets_at not repaired: got {after[glitch_t][0]}")
-        if after[reset_t][1] != boundary:
-            failures.append(f"reset period_start_at not repaired: got {after[reset_t][1]}")
-        if after[datetime(2026,6,4,5,39,5,tzinfo=timezone.utc)][1] != boundary:
-            failures.append("post-reset period_start_at not repaired")
-        # untouched earlier rows
-        if after[datetime(2026,6,4,0,29,6,tzinfo=timezone.utc)][1] != datetime(2026,6,3,19,30,tzinfo=timezone.utc):
-            failures.append("earlier period_start_at wrongly changed")
-        if result.get('resets_at_sanitized', 0) < 1 or result.get('period_start_updates', 0) < 2:
-            failures.append(f"unexpected repair counts: {result}")
-
-        if failures:
-            print("FAIL")
-            for f in failures:
-                print("  -", f)
-            raise SystemExit(1)
-        print("PASS", result)
+        assert after[glitch_t][0] == boundary, f"glitch resets_at not repaired: {after[glitch_t][0]}"
+        assert after[reset_t][1] == boundary, f"reset period_start_at not repaired: {after[reset_t][1]}"
+        assert after[post_t][1] == boundary, "post-reset period_start_at not repaired"
+        assert after[early_t][1] == datetime(2026, 6, 3, 19, 30, tzinfo=timezone.utc), \
+            "earlier period_start_at wrongly changed"
+        assert result.get('resets_at_sanitized', 0) >= 1 and result.get('period_start_updates', 0) >= 2, \
+            f"unexpected repair counts: {result}"
     finally:
-        db.close()
-        os.unlink(path)
+        db.close(); os.unlink(path)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    failures = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith('test_') and callable(fn):
+            try:
+                fn()
+                print(f"PASS {name}")
+            except Exception as e:
+                failures += 1
+                print(f"FAIL {name}: {type(e).__name__}: {e}")
+    raise SystemExit(failures)
