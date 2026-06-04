@@ -524,6 +524,31 @@ class UsageDatabase:
             'resets_at_sanitized': len(resets_updates),
         }
 
+    def delete_older_than(self, cutoff: datetime) -> Dict[str, int]:
+        """Delete snapshots captured before `cutoff` and their quotas.
+
+        foreign_keys pragma is OFF on this connection, so ON DELETE CASCADE does
+        NOT fire — delete child `quotas` first, then `snapshots`, in one
+        transaction. `cutoff` is a tz-aware datetime passed as a bound param so
+        the registered adapter formats it exactly like stored `captured_at`
+        (same approach as get_history). Returns {'snapshots': N, 'quotas': M}.
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM quotas WHERE snapshot_id IN "
+            "(SELECT id FROM snapshots WHERE captured_at < ?)", (cutoff,))
+        quotas = cur.rowcount
+        cur.execute("DELETE FROM snapshots WHERE captured_at < ?", (cutoff,))
+        snapshots = cur.rowcount
+        self.conn.commit()
+        return {'snapshots': snapshots, 'quotas': quotas}
+
+    def vacuum(self) -> None:
+        """Reclaim free pages after a delete. Commit first — VACUUM cannot run
+        inside a transaction."""
+        self.conn.commit()
+        self.conn.execute("VACUUM")
+
     def close(self):
         """Close database connection."""
         if self.conn:
