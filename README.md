@@ -177,6 +177,7 @@ containing `KEY=value` lines — no `export`, no quotes needed.
 | SESSION_COOKIE_SECURE | Set to `1` when served over HTTPS (Secure cookie) | 0 |
 | ALLOW_DEFAULT_CREDENTIALS | Set to `1` to allow built-in defaults (local dev only) | unset |
 | CLAUDE_BIN | Path to Claude CLI | claude |
+| RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and `data/raw_debug/` files are pruned daily | 90 |
 
 Generate a secure secret key with:
 
@@ -186,6 +187,18 @@ python3 -c 'import secrets; print(secrets.token_hex(32))'
 
 After changing any variable, restart the service:
 `sudo systemctl restart claude-dashboard`.
+
+### Data retention
+
+`collect_history.sh` runs `cleanup_old_data.py` at most once per day (gated by a
+`data/.cleanup_done` date marker). It deletes snapshots+quotas older than
+`RETENTION_DAYS`, removes `data/YYYY-MM-DD/` JSON dirs and `data/raw_debug/`
+files past the same window, and `VACUUM`s the database only when rows were
+removed. Run it manually anytime, and use `--dry-run` to preview:
+
+```bash
+venv/bin/python cleanup_old_data.py --dry-run
+```
 
 ## Upgrading an Existing Deployment
 
