@@ -542,6 +542,29 @@ def _dump_raw_debug(raw_bytes: bytes, clean_text: str,
         print(f"[usage_fetcher] raw debug dump failed: {e}", file=sys.stderr)
 
 
+def _should_stop_reading(complete_detected: bool, sync_end_after_quotas: bool,
+                         idle_seconds: float, on_usage_screen: bool) -> bool:
+    """Decide whether the PTY read loop has captured a usable /usage frame.
+
+    - All quota markers present *and* the synchronized-output end after them →
+      fully rendered frame, stop immediately.
+    - All quota markers present but no sync-end (some Claude CLI builds don't
+      re-emit it after the late-rendering quota bars) → stop once the render has
+      settled (no new bytes for >= IDLE_TIMEOUT), instead of sitting out the full
+      IDLE_USAGE_TIMEOUT. This is what kept every fetch at ~17.5s.
+    - Not complete yet: on the usage screen the bars may still be arriving, so wait
+      up to IDLE_USAGE_TIMEOUT; on any other screen (auth error / setup / unknown)
+      bail after the short IDLE_TIMEOUT.
+    """
+    if complete_detected and sync_end_after_quotas:
+        return True
+    if complete_detected and idle_seconds >= IDLE_TIMEOUT:
+        return True
+    if idle_seconds >= IDLE_TIMEOUT and (not on_usage_screen or idle_seconds > IDLE_USAGE_TIMEOUT):
+        return True
+    return False
+
+
 def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
     """
     Fetch usage data from claude CLI.
@@ -590,34 +613,24 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
                 output += data
                 last_data_time = time.time()
 
-                # Detect completeness on the raw buffer — Claude separates the
-                # percent from "used" with a cursor-move escape (RAW_PCT_USED_PATTERN),
-                # so a literal "% used" substring never matches. End the loop as soon
-                # as we see a sync-update termination after the 3rd quota marker;
-                # waiting longer only lets diff frames overwrite labels.
-                if not complete_detected:
-                    text = output.decode('utf-8', errors='replace')
-                    if len(RAW_PCT_USED_PATTERN.findall(text)) >= MIN_COMPLETE_QUOTAS:
-                        complete_detected = True
+            if last_data_time is None:
+                continue  # claude still starting up — nothing read yet
 
-                if complete_detected:
-                    text = output.decode('utf-8', errors='replace')
-                    if SYNC_UPDATE_END.search(text, _cut_search_start(text)) or last_data_time and time.time() - last_data_time > 0.5:
-                        log.debug('complete data detected, %d bytes, %.2fs elapsed',
-                                  len(output), time.time() - start_time)
-                        break
-            elif last_data_time and time.time() - last_data_time > IDLE_TIMEOUT:
-                idle = time.time() - last_data_time
-                text = output.decode('utf-8', errors='replace')
-                on_usage_screen = USAGE_SCREEN_MARKER.search(text) is not None
-                # On the usage screen the quota bars arrive last and can lag a few
-                # seconds behind the rest of the view; don't give up in that gap.
-                # Bail fast only for non-usage screens (auth error, setup wizard,
-                # unknown layout) or after a long stall with no quotas at all.
-                if not on_usage_screen or idle > IDLE_USAGE_TIMEOUT:
-                    log.debug('idle timeout (%.1fs, usage_screen=%s), %d bytes',
-                              idle, on_usage_screen, len(output))
-                    break
+            # Detect completeness on the raw buffer — Claude separates the percent
+            # from "used" with a cursor-move escape (RAW_PCT_USED_PATTERN), so a
+            # literal "% used" substring never matches.
+            text = output.decode('utf-8', errors='replace')
+            if not complete_detected and len(RAW_PCT_USED_PATTERN.findall(text)) >= MIN_COMPLETE_QUOTAS:
+                complete_detected = True
+            idle = time.time() - last_data_time
+            sync_end = complete_detected and bool(SYNC_UPDATE_END.search(text, _cut_search_start(text)))
+            on_usage_screen = USAGE_SCREEN_MARKER.search(text) is not None
+
+            if _should_stop_reading(complete_detected, sync_end, idle, on_usage_screen):
+                log.debug('stop: complete=%s sync_end=%s idle=%.1fs usage=%s, %d bytes, %.2fs',
+                          complete_detected, sync_end, idle, on_usage_screen,
+                          len(output), time.time() - start_time)
+                break
 
         if time.time() - start_time >= timeout:
             log.debug('overall timeout reached, %d bytes', len(output))
