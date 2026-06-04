@@ -103,6 +103,13 @@ QUOTA_LABELS = {
     'week (opus only)': ('model_specific', 'opus'),
 }
 
+# Period length (hours) for SHORT-cycle quotas. Used to tell a just-passed
+# boundary glitch (a bare reset time barely in the past) from a genuine next-day
+# reset: a 5h session reset is never ~24h away, so a just-passed bare time must
+# NOT be rolled to tomorrow. Quota types absent here keep the plain "if it's in
+# the past, it's tomorrow" behavior.
+_QUOTA_PERIOD_HOURS = {'session': 5}
+
 
 def emulate_terminal(data: str, width: int = 120) -> str:
     """Emulate terminal to properly handle cursor movements.
@@ -235,7 +242,8 @@ def parse_relative_time(text: str) -> Optional[int]:
     return total_seconds if total_seconds > 0 else None
 
 
-def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
+def parse_reset_time(lines: List[str], start_idx: int, quota_type: Optional[str] = None,
+                     now: Optional[datetime] = None) -> tuple:
     """Parse reset time from lines after the % line, bounded to the current section.
 
     A section ends at the first blank line or known quota-boundary header. Without
@@ -273,7 +281,7 @@ def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
     duration_seconds = parse_relative_time(search_text)
 
     reset_time = None
-    now_utc = datetime.now(timezone.utc)
+    now_utc = now if now is not None else datetime.now(timezone.utc)
 
     if duration_seconds:
         reset_time = now_utc + timedelta(seconds=duration_seconds)
@@ -293,15 +301,20 @@ def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
             hour = 0
 
         year = now_utc.year
-        # Create datetime in the detected timezone
-        reset_time = datetime(year, month, int(day), hour, int(minute), tzinfo=tz)
-        # Convert to UTC
-        reset_time = reset_time.astimezone(timezone.utc)
-        if reset_time < now_utc:
-            reset_time = datetime(year + 1, month, int(day), hour, int(minute), tzinfo=tz)
+        try:
+            # Create datetime in the detected timezone, then convert to UTC.
+            reset_time = datetime(year, month, int(day), hour, int(minute), tzinfo=tz)
             reset_time = reset_time.astimezone(timezone.utc)
-        # Recalculate duration from absolute time
-        duration_seconds = int((reset_time - now_utc).total_seconds())
+            if reset_time < now_utc:
+                reset_time = datetime(year + 1, month, int(day), hour, int(minute),
+                                      tzinfo=tz).astimezone(timezone.utc)
+            # Recalculate duration from absolute time
+            duration_seconds = int((reset_time - now_utc).total_seconds())
+        except ValueError:
+            # Garbled PTY frame (e.g. "Feb 31"): drop the reset instead of raising
+            # out of the whole snapshot.
+            log.debug('discarding invalid reset date %r', date_match.group(0))
+            reset_time = None
     else:
         # Try to find time only (e.g. "4pm", "3:59pm")
         time_match = TIME_ONLY_PATTERN.search(search_text)
@@ -314,17 +327,28 @@ def parse_reset_time(lines: List[str], start_idx: int) -> tuple:
             elif ampm.lower() == 'am' and hour == 12:
                 hour = 0
 
-            # Get current time in the detected timezone
-            now_tz = now_utc.astimezone(tz)
-            reset_time = now_tz.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            # If time has passed, it will be tomorrow
-            if reset_time < now_tz:
-                reset_time += timedelta(days=1)
-            # Convert to UTC
-            reset_time = reset_time.astimezone(timezone.utc)
-
-            # Calculate duration_seconds
-            duration_seconds = int((reset_time - now_utc).total_seconds())
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                # Garbled PTY frame (e.g. "25:99pm"): drop rather than raise.
+                log.debug('discarding out-of-range reset time %r', time_match.group(0))
+            else:
+                # Get current time in the detected timezone
+                now_tz = now_utc.astimezone(tz)
+                reset_time = now_tz.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if reset_time < now_tz:
+                    # A bare time in the past usually means "tomorrow" — but for a
+                    # short-period quota (session, 5h) the reset is never ~24h away,
+                    # so a *just-passed* time is the boundary firing. Rolling it a day
+                    # forward would manufacture a +24h reset (the historical
+                    # session-chart glitch). Only bump when the gap exceeds one period.
+                    period_h = _QUOTA_PERIOD_HOURS.get(quota_type)
+                    just_passed = (period_h is not None
+                                   and (now_tz - reset_time) < timedelta(hours=period_h))
+                    if not just_passed:
+                        reset_time += timedelta(days=1)
+                # Convert to UTC
+                reset_time = reset_time.astimezone(timezone.utc)
+                # Calculate duration_seconds
+                duration_seconds = int((reset_time - now_utc).total_seconds())
 
     # Find reset text
     reset_text = ''
@@ -372,27 +396,32 @@ def parse_quotas(text: str) -> List[Dict[str, Any]]:
                 for j in range(i, min(i + 5, len(lines))):
                     percent = parse_percentage(lines[j])
                     if percent is not None:
-                        reset_text, reset_time, duration_seconds = parse_reset_time(lines, j)
+                        try:
+                            reset_text, reset_time, duration_seconds = parse_reset_time(
+                                lines, j, quota_type=quota_type)
 
-                        quota = {
-                            'type': quota_type,
-                            'percent_remaining': percent,
-                        }
+                            quota = {
+                                'type': quota_type,
+                                'percent_remaining': percent,
+                            }
 
-                        if model:
-                            quota['model'] = model
+                            if model:
+                                quota['model'] = model
 
-                        if reset_time:
-                            quota['resets_at'] = reset_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                            if reset_time:
+                                quota['resets_at'] = reset_time.strftime('%Y-%m-%dT%H:%M:%SZ')
 
-                        if reset_text:
-                            quota['reset_text'] = reset_text
+                            if reset_text:
+                                quota['reset_text'] = reset_text
 
-                        if duration_seconds:
-                            quota['time_remaining_seconds'] = duration_seconds
-                            quota['time_remaining_human'] = format_duration(duration_seconds)
+                            if duration_seconds:
+                                quota['time_remaining_seconds'] = duration_seconds
+                                quota['time_remaining_human'] = format_duration(duration_seconds)
 
-                        quotas.append(quota)
+                            quotas.append(quota)
+                        except Exception:
+                            # One malformed section must not discard the others.
+                            log.exception('skipping malformed quota section %r', label)
                         break
                 break
 
