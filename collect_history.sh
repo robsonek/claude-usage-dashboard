@@ -62,6 +62,19 @@ if ! echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py"; then
     exit 1
 fi
 
+# Retention cleanup, at most once per day (date-marker gated). Runs inside the
+# existing flock. Housekeeping only: a failure is logged but never fails the
+# collection run, and the marker is written only on success so a failed run
+# retries on the next tick.
+CLEANUP_MARKER="$DATA_DIR/.cleanup_done"
+if [ "$(cat "$CLEANUP_MARKER" 2>/dev/null)" != "$TODAY" ]; then
+    if "$VENV_PYTHON" "$SCRIPT_DIR/cleanup_old_data.py"; then
+        echo "$TODAY" > "$CLEANUP_MARKER"
+    else
+        log "WARN: cleanup_old_data.py failed (non-fatal)"
+    fi
+fi
+
 # Surface a persistent fetch error to the timer/monitoring (artifacts already saved).
 if [ "$FETCH_ERROR" -ne 0 ]; then
     exit 2
