@@ -296,6 +296,7 @@
 
                 if (data.error) {
                     console.error('Error fetching data:', data.error);
+                    updateFreshness(null);
                     return;
                 }
 
@@ -335,6 +336,7 @@
                 updateFreshness(data.timestamp);
             } catch (error) {
                 console.error('Error:', error);
+                updateFreshness(null);
             }
         }
 
