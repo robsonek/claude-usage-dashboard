@@ -36,6 +36,9 @@ Thumbs.db
 # Claude Code local settings
 .claude/
 
+# Superpowers brainstorming companion (mockups, transient)
+.superpowers/
+
 # Environment
 .env
 .env.local
