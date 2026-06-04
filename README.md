@@ -177,7 +177,7 @@ containing `KEY=value` lines — no `export`, no quotes needed.
 | SESSION_COOKIE_SECURE | Set to `1` when served over HTTPS (Secure cookie) | 0 |
 | ALLOW_DEFAULT_CREDENTIALS | Set to `1` to allow built-in defaults (local dev only) | unset |
 | CLAUDE_BIN | Path to Claude CLI | claude |
-| RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and `data/raw_debug/` files are pruned daily | 90 |
+| RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and `data/raw_debug/` files are pruned daily (the dashboard only charts up to 1 month) | 60 |
 
 Generate a secure secret key with:
 

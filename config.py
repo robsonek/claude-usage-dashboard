@@ -9,7 +9,7 @@ DB_FILE = os.path.join(BASE_DIR, 'usage.db')
 
 # Data retention: rows/files older than this many days are pruned by
 # cleanup_old_data.py (invoked once/day from collect_history.sh).
-RETENTION_DAYS = int(os.environ.get('RETENTION_DAYS', '90'))
+RETENTION_DAYS = int(os.environ.get('RETENTION_DAYS', '60'))
 
 # Secret key for Flask session. A placeholder fallback keeps imports working
 # (the collector imports this module too), but app.py refuses to actually serve
