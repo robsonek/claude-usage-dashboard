@@ -43,3 +43,12 @@ def test_status_cards_have_value_and_trend_hooks():
                  'id="weekly-trend"', 'id="session-trend"', 'id="model-trend"',
                  'id="card-weekly"', 'id="card-session"', 'id="card-model"'):
         assert hook in html, f"missing {hook}"
+
+
+def test_chart_colors_swapped_to_palette():
+    html = _read("templates/dashboard.html")
+    assert "#22d3ee" in html      # weekly line (cyan)
+    assert "#a78bfa" in html      # sonnet line (violet)
+    assert "#3498db" not in html  # old blue removed
+    assert "#9b59b6" not in html  # old purple removed
+    assert "Sonnet Usage (% used)" in html

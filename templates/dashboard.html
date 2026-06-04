@@ -116,7 +116,7 @@
             </div>
 
             <div class="chart-container">
-                <h2>Model Specific Usage (% used)</h2>
+                <h2>Sonnet Usage (% used)</h2>
                 <canvas id="chart-model"></canvas>
             </div>
         </section>
@@ -170,6 +170,11 @@
         };
         Chart.register(resetMarkersPlugin);
 
+        // Dark-theme defaults (hex values mirror the CSS tokens; dark-only app).
+        Chart.defaults.color = '#8499ab';
+        Chart.defaults.font.family = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+        Chart.defaults.borderColor = '#15202b';
+
         // Extract distinct period boundaries from a dataset's points.
         // Each point carries periodStartAt (frozen at insert time); a *change*
         // between consecutive points is a real reset that fired in-window.
@@ -208,18 +213,16 @@
                             },
                             tooltipFormat: 'dd.MM.yyyy HH:mm'
                         },
-                        title: {
-                            display: true,
-                            text: 'Time'
-                        }
+                        grid: { color: '#15202b' },
+                        ticks: { color: '#5b7083' },
+                        title: { display: true, text: 'Time', color: '#8499ab' }
                     },
                     y: {
                         min: 0,
                         max: 100,
-                        title: {
-                            display: true,
-                            text: '% used'
-                        }
+                        grid: { color: '#15202b' },
+                        ticks: { color: '#5b7083' },
+                        title: { display: true, text: '% used', color: '#8499ab' }
                     }
                 },
                 plugins: {
@@ -229,10 +232,10 @@
                     },
                     tooltip: {
                         enabled: true,
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        titleColor: '#fff',
-                        bodyColor: '#fff',
-                        borderColor: 'rgba(255, 255, 255, 0.2)',
+                        backgroundColor: '#0f161d',
+                        titleColor: '#e8f0f5',
+                        bodyColor: '#e8f0f5',
+                        borderColor: '#15202b',
                         borderWidth: 1,
                         padding: 12,
                         displayColors: true,
@@ -275,8 +278,8 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#3498db', backgroundColor: 'rgba(52, 152, 219, 0.1)', fill: true, data: [] },
-                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
+                        { label: 'Usage', borderColor: '#22d3ee', backgroundColor: 'rgba(34, 211, 238, 0.12)', fill: true, data: [] },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
             });
@@ -285,8 +288,8 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', fill: true, data: [] },
-                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
+                        { label: 'Usage', borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, data: [] },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
             });
@@ -295,8 +298,8 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#9b59b6', backgroundColor: 'rgba(155, 89, 182, 0.1)', fill: true, data: [] },
-                        { label: 'Target', borderColor: '#f39c12', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
+                        { label: 'Usage', borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.12)', fill: true, data: [] },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
             });
