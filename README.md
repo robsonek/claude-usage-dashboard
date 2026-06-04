@@ -259,7 +259,7 @@ Without authentication, the dashboard will show empty quota data.
 
 ## Security Recommendations
 
-1. Change default password immediately after deployment
+1. Set a strong `DASHBOARD_PASSWORD` and `FLASK_SECRET_KEY` before the first start — the app fails closed and refuses to run on the built-in defaults (see [Configuration](#configuration))
 2. Configure HTTPS with Let's Encrypt (certbot)
 3. Set up firewall rules (ufw or iptables)
 4. Restrict SSH access
