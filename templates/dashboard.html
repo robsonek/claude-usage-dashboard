@@ -192,6 +192,22 @@
             return out;
         }
 
+        // Collapse spiky per-period points into one peak (max %) per calendar day.
+        // Used for the session chart at long ranges, where ~5h periods would
+        // otherwise overlap into a solid band. Preserves point shape {x: Date, y}.
+        function dailyPeakEnvelope(data) {
+            const peak = new Map(); // day-start ms -> max y that day
+            for (const p of data) {
+                const d = new Date(p.x);
+                d.setHours(0, 0, 0, 0);
+                const key = d.getTime();
+                const prev = peak.get(key);
+                if (prev === undefined || p.y > prev) peak.set(key, p.y);
+            }
+            return Array.from(peak.keys()).sort((a, b) => a - b)
+                .map(k => ({ x: new Date(k), y: peak.get(k) }));
+        }
+
         // Chart configuration
         const chartConfig = {
             type: 'line',
@@ -430,9 +446,21 @@
                 chartWeekly.$resetMarkerLines = extractResetMarkers(weeklyData);
                 chartWeekly.update();
 
-                chartSession.data.datasets[0].data = sessionData;
-                chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5);
-                chartSession.$resetMarkerLines = extractResetMarkers(sessionData);
+                // Session period is ~5h, so long ranges pile ~5h ramps into an
+                // unreadable forest. Past ~20 periods in view (≈7d+), collapse to a
+                // daily-peak envelope (one max point per day) and drop the now-
+                // meaningless per-period Target + reset markers.
+                if (currentTimeRange / 5 > 20) {
+                    chartSession.data.datasets[0].data = dailyPeakEnvelope(sessionData);
+                    chartSession.data.datasets[0].label = 'Daily peak';
+                    chartSession.data.datasets[1].data = [];
+                    chartSession.$resetMarkerLines = [];
+                } else {
+                    chartSession.data.datasets[0].data = sessionData;
+                    chartSession.data.datasets[0].label = 'Usage';
+                    chartSession.data.datasets[1].data = calculateIdealLine(sessionData, 5);
+                    chartSession.$resetMarkerLines = extractResetMarkers(sessionData);
+                }
                 chartSession.update();
 
                 chartModel.data.datasets[0].data = modelData;

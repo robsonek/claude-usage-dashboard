@@ -72,3 +72,9 @@ def test_ui_text_is_english():
     html = _read("templates/dashboard.html")
     for pl in ("temu", "teraz", "Wiek ostatniego"):
         assert pl not in html, f"Polish text leaked: {pl}"
+
+
+def test_session_chart_has_daily_peak_envelope():
+    html = _read("templates/dashboard.html")
+    assert "dailyPeakEnvelope" in html
+    assert "Daily peak" in html
