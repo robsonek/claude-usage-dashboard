@@ -16,6 +16,10 @@ env/
 # Data (contains personal info)
 data/
 
+# DB backups / one-off raw-capture debug tool (transient, may hold usage data)
+backup_*.sql
+capture_raw.py
+
 # IDE
 .idea/
 .vscode/

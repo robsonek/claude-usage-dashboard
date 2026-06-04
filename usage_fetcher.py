@@ -54,9 +54,11 @@ AUTH_ERROR_PATTERNS = {
     'no_subscription': re.compile(r"free\s+tier|no\s+(active\s+)?subscription", re.IGNORECASE),
 }
 
-# Raw-buffer marker: Claude prints "N%<ESC>[1Cused" (cursor forward splits % and used).
-# Used both to detect completeness before terminal emulation and to pick the right frame.
-RAW_PCT_USED_PATTERN = re.compile(r'\d+%\x1b\[1Cused')
+# Raw-buffer marker: Claude separates the percentage from "used" with a cursor-move
+# escape. Older CLIs used cursor-forward ("N%<ESC>[1Cused"); 2.1.x positions "used"
+# with a column-absolute move ("N%<ESC>[57Gused"). Match either C or G so completeness
+# detection and frame trimming keep working across versions.
+RAW_PCT_USED_PATTERN = re.compile(r'\d+%\x1b\[\d+[CG]used')
 
 # DEC private-mode 2026: synchronized output (begin/end). Claude wraps each render
 # in these. We stop reading at the end of the first frame that already contains all
@@ -124,6 +126,8 @@ def emulate_terminal(data: str, width: int = 120) -> str:
 
                     if cmd == 'C':  # Cursor forward
                         col += num
+                    elif cmd == 'G':  # Cursor horizontal absolute (1-based column)
+                        col = max(0, num - 1)
                     elif cmd == 'D':  # Cursor back
                         col = max(0, col - num)
                     elif cmd == 'A':  # Cursor up

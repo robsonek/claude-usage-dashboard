@@ -1,0 +1,78 @@
+7[r8[?25h[?25l[?2004h[?1004h[?2031h[<u[>1u[>4;2m[>0q[c]0;✳ Claude Code]9;4;0;[?2026h[38;2;215;119;87m ▐[48;2;0;0;0m▛███▜[49m▌[12G[39m[1mClaude[19GCode[24G[22m[38;2;153;153;153mv2.1.162[39m
+[38;2;215;119;87m▝▜[48;2;0;0;0m█████[49m▛▘[12G[38;2;153;153;153mOpus[17G4.8[21G(1M[25Gcontext)[34G·[36GClaude[43GMax[39m
+[38;2;215;119;87m [3G▘▘[6G▝▝[12G[38;2;153;153;153m~/AI/claude-usage-dashboard[39m
+
+[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────[39m
+❯ [7mT[27m[2mry[7G"how[12Gdo[15GI[17Glog[21Gan[24Gerror?"[22m
+[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;2;255;193;7m⏵⏵[6Gauto[11Gmode[16Gon[38;2;153;153;153m (shift+tab[30Gto[33Gcycle)[40G·[42G←[44Gfor[48Gagents[63G●[65Ghigh[70G·[72G/effort[39m
+[2C[3A[?2026l[?2026h[2D[3B[2C[1A[36m[Opus 4.8 (1M context)][38;2;153;153;153m Branch: main[40G|[42GContext: [90mN/A% remaining[38;2;153;153;153m | Session: 0…[39m
+[3G[38;2;255;193;7m⏵⏵[6Gauto[11Gmode[16Gon[38;2;153;153;153m (shift+tab[30Gto[33Gcycle)[40G·[42G←[44Gfor[48Gagents[39m
+[63G[38;2;153;153;153m●[65Ghigh[70G·[72G/effort[39m
+[2C[5A[?2026l[?2026h[2D[5B[6A[K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────[1B[39m❯ [7mT[27m[2mry "how do I log an error?"[22m[K[1B[38;2;136;136;136m────────────────────────────────────────────────────────────────────────────────[2C[1B[36m[Opus 4.8 (1M context)][38;2;153;153;153m Branch: main[40G|[42GContext: [90mN/A% remaining[38;2;153;153;153m | Session: 0…[2C[1B[38;2;255;193;7m⏵⏵ auto mode on[38;2;153;153;153m (shift+tab to cycle) · ← for agents[63G[39m[K
+[63G[38;2;153;153;153m●[65Ghigh[70G·[72G/effort[39m
+[2C[5A[?2026l]9;4;3;[?2026h[2D[5B[6A[48;2;55;55;55m[38;2;80;80;80m❯ [38;2;255;255;255m/usage[39m                                                                        [1B[49m[K[1B[38;2;177;185;249m────────────────────────────────────────────────────────────────────────────────[2C[1B[1mSettings[22m[39m  Status   Config  [48;2;177;185;249m[38;2;0;0;0m[1m Usage [22m[39m[49m  Stats[K[2C[1B[K[2C[1B[1mSession[63G[22m[K
+
+[3G[38;2;153;153;153mTotal[9Gcost:[26G$0.0000[39m
+[3G[38;2;153;153;153mTotal[9Gduration[18G(API):[26G0s[39m
+[3G[38;2;153;153;153mTotal[9Gduration[18G(wall):[26G1s[39m
+[3G[38;2;153;153;153mTotal[9Gcode[14Gchanges:[26G0[28Glines[34Gadded,[41G0[43Glines[49Gremoved[39m
+[3G[38;2;153;153;153mUsage:[26G0[28Ginput,[35G0[37Goutput,[45G0[47Gcache[53Gread,[59G0[61Gcache[67Gwrite[39m
+
+[3G[38;2;153;153;153mLoading[11Gusage[17Gdata…[39m
+
+[3G[38;2;153;153;153mEsc[7Gto[10Gcancel[39m
+[30C[13A[?2026l[?2026h[30D[13B[2C[3A[1mCurrent session[22m[K[2C[1B[48;2;80;83;112m[38;2;177;185;249m████                                              [54G[39m[49m8%[57Gused[2C[1B[38;2;153;153;153mRese[8Gs[10G5:30pm (Europe/Warsaw)[39m
+
+[3G[1mCurrent[11Gweek[16G(all[21Gmodels)[22m
+[3G[48;2;80;83;112m[38;2;177;185;249m████████████████████▌                             [54G[39m[49m41%[58Gused
+[3G[38;2;153;153;153mResets[10GJun[14G8[16Gat[19G1pm[23G(Europe/Warsaw)[39m
+
+[3G[1mCurrent[11Gweek[16G(Sonnet[24Gonly)[22m
+[3G[48;2;80;83;112m[38;2;177;185;249m                                                  [54G[39m[49m0%[57Gused
+[3G[38;2;153;153;153mResets[10GJun[14G8[16Gat[19G1pm[23G(Europe/Warsaw)[39m
+
+[3G[1mWhat's[10Gcontributing[23Gto[26Gyour[31Glimits[38Gusage?[22m
+[3G[38;2;153;153;153mApproximate,[16Gbased[22Gon[25Glocal[31Gsessions[40Gon[43Gthis[48Gmachine[56G—[58Gdoes[63Gnot[67Ginclude[39m
+[3G[38;2;153;153;153mother[9Gdevices[17Gor[20Gclaude.ai[39m
+
+[3G[38;2;153;153;153mScanning[12Glocal[18Gsessions…[39m
+
+[3G[38;2;153;153;153mEsc[7Gto[10Gcancel[39m
+[30C[29A[?2026l[?2026h[30D[29B[2C[3A[38;2;153;153;153mLast 24h[12G· these are independent characteristics of your usage, not a [2C[1Bbreakdown[2C[1B[39m[K
+[3G94%[7Gof[10Gyour[15Gusage[21Gcame[26Gfrom[31Gsubagent-heavy[46Gsessions
+[4G[38;2;153;153;153mEach[9Gsubagent[18Gruns[23Gits[27Gown[31Grequests.[41GBe[44Gdeliberate[55Gabout[61Gspawning[70Gthem[75G—[77Gand[39m
+[4G[38;2;153;153;153mconsider[13Gconfiguring[25Ga[27Gcheaper[35Gmodel[41Gfor[45Gsimpler[53Gsubagents.[39m
+
+[3G72%[7Gof[10Gyour[15Gusage[21Gcame[26Gfrom[31Gsessions[40Gactive[47Gfor[51G8+[54Ghours
+[4G[38;2;153;153;153mThese[10Gare[14Goften[20Gbackground/loop[36Gsessions.[46GContinuous[57Gusage[63Gcan[67Gadd[71Gup[74Gquickly[39m
+[4G[38;2;153;153;153mso[7Gmake[12Gsure[17Git[20Gis[23Gintentional.[39m
+
+[3G27%[7Gof[10Gyour[15Gusage[21Gwas[25Gat[28G>150k[34Gcontext
+[4G[38;2;153;153;153mLonger[11Gsessions[20Gare[24Gmore[29Gexpensive[39Geven[44Gwhen[49Gcached.[57G/compact[66Gmid-task,[39m
+[4G[38;2;153;153;153m/clear[11Gwhen[16Gswitching[26Gto[29Gnew[33Gtasks.[39m
+
+[3G57%[7Gof[10Gyour[15Gusage[21Gcame[26Gfrom[31Gsubagents[41Gunder[47G"general-purpose"
+[4G[38;2;153;153;153mIf[7Gthis[12Gruns[17Gfrequently,[29Gconsider[38Gconfiguring[50Gits[54Gsubagents[64Gwith[69Ga[71Gcheaper[39m
+[4G[38;2;153;153;153mmodel[10Gor[13Gtightening[24Gtheir[30Gprompts.[39m
+
+[3GSkills[27G[38;2;153;153;153m%[29Gof[32Gusage[39m
+[3G[38;2;153;153;153m/superpowers:brainstorming[35G1%[39m
+[3G[38;2;153;153;153m/superpowers:test-driven-de…[35G1%[39m
+[3G[38;2;153;153;153m/superpowers:writing-plans[35G1%[39m
+[3G[38;2;153;153;153m/superpowers:systematic-deb…[35G1%[39m
+
+[3GSubagents[27G[38;2;153;153;153m%[29Gof[32Gusage[39m
+[3G[38;2;153;153;153mgeneral-purpose[34G57%[39m
+[3G[38;2;153;153;153mworkflow-subagent[35G6%[39m
+[3G[38;2;153;153;153msuperpowers:writing-plans[35G1%[39m
+[3G[38;2;153;153;153msuperpowers:brainstorming[35G1%[39m
+
+[3GPlugins[27G[38;2;153;153;153m%[29Gof[32Gusage[39m
+[3G[38;2;153;153;153msuperpowers[35G5%[39m
+[3G[38;2;153;153;153mcodex[35G1%[39m
+
+[3G[38;2;153;153;153md[5Gto[8Gday[12G·[14Gw[16Gto[19Gweek[39m
+
+[3G[38;2;153;153;153mEsc[7Gto[10Gcancel[39m
+[30C[64A[?2026l
