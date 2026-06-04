@@ -509,6 +509,22 @@
             el.textContent = `${arrow} ${Math.abs(t)}%/h`;
         }
 
+        function predKv(prediction, opts) {
+            opts = opts || {};
+            const atReset = opts.atReset !== undefined ? opts.atReset : (prediction.predicted_at_reset + '%');
+            const to100 = opts.to100 !== undefined ? opts.to100
+                : (prediction.hours_to_100 ? formatHours(prediction.hours_to_100) : '∞');
+            const warn = opts.warn ? ' class="warn"' : '';
+            return `
+                <dl class="pred-kv">
+                    <dt>Current</dt><dd${warn}>${prediction.current_usage}%</dd>
+                    <dt>At reset</dt><dd${warn}>${atReset}</dd>
+                    <dt>Trend</dt><dd>${opts.trend !== undefined ? opts.trend : prediction.trend_per_hour + '%/h'}</dd>
+                    <dt>To 100%</dt><dd${warn}>${to100}</dd>
+                    <dt>To reset</dt><dd>${formatHours(prediction.time_to_reset_hours)}</dd>
+                </dl>`;
+        }
+
         function updatePredictionCard(elementId, prediction) {
             const card = document.getElementById(elementId);
             const content = card.querySelector('.prediction-content');
@@ -518,56 +534,30 @@
                 return;
             }
 
-            // Handle stale data (after reset)
             if (prediction.stale_data) {
-                content.innerHTML = `
-                    <div class="prediction-status pending">
-                        🔄 Reset occurred, waiting for new data...
-                    </div>
-                    <div class="prediction-details">
-                        <p>Current: <strong>${prediction.current_usage}%</strong></p>
-                        <p>Predicted at reset: <strong>${prediction.current_usage}%</strong></p>
-                        <p>Trend: <strong>0%/h</strong></p>
-                        <p>To 100%: <strong>∞</strong></p>
-                        <p>To reset: <strong>${formatHours(prediction.time_to_reset_hours)}</strong></p>
-                    </div>
-                `;
+                content.innerHTML =
+                    '<div class="pred-badge pending">🔄 Reset — waiting for data</div>' +
+                    predKv(prediction, { atReset: prediction.current_usage + '%', trend: '0%/h', to100: '∞' });
                 return;
             }
 
-            // Handle low confidence (not enough time span)
             if (prediction.low_confidence) {
-                content.innerHTML = `
-                    <div class="prediction-status pending">
-                        📊 Collecting data...
-                    </div>
-                    <div class="prediction-details">
-                        <p>Current: <strong>${prediction.current_usage}%</strong></p>
-                        <p>Predicted at reset: <strong>${prediction.current_usage}%</strong></p>
-                        <p>Trend: <strong>${prediction.trend_per_hour !== null ? prediction.trend_per_hour + '%/h' : '0%/h'}</strong></p>
-                        <p>To 100%: <strong>∞</strong></p>
-                        <p>To reset: <strong>${formatHours(prediction.time_to_reset_hours)}</strong></p>
-                    </div>
-                `;
+                content.innerHTML =
+                    '<div class="pred-badge pending">📊 Collecting…</div>' +
+                    predKv(prediction, {
+                        atReset: prediction.current_usage + '%',
+                        trend: (prediction.trend_per_hour !== null ? prediction.trend_per_hour + '%/h' : '0%/h'),
+                        to100: '∞'
+                    });
                 return;
             }
 
-            const statusClass = prediction.will_exceed ? 'warning' : 'ok';
-            const statusIcon = prediction.will_exceed ? '⚠️' : '✅';
-            const statusText = prediction.will_exceed ? 'Will exceed limit!' : 'On track';
-
-            content.innerHTML = `
-                <div class="prediction-status ${statusClass}">
-                    ${statusIcon} ${statusText}
-                </div>
-                <div class="prediction-details">
-                    <p>Current: <strong>${prediction.current_usage}%</strong></p>
-                    <p>Predicted at reset: <strong>${prediction.predicted_at_reset}%</strong></p>
-                    <p>Trend: <strong>${prediction.trend_per_hour}%/h</strong></p>
-                    <p>To 100%: <strong>${prediction.hours_to_100 ? formatHours(prediction.hours_to_100) : '∞'}</strong></p>
-                    <p>To reset: <strong>${formatHours(prediction.time_to_reset_hours)}</strong></p>
-                </div>
-            `;
+            const cls = prediction.will_exceed ? 'warning' : 'ok';
+            const icon = prediction.will_exceed ? '⚠' : '✓';
+            const text = prediction.will_exceed ? 'Will exceed limit' : 'On track';
+            content.innerHTML =
+                `<div class="pred-badge ${cls}">${icon} ${text}</div>` +
+                predKv(prediction, { warn: prediction.will_exceed });
         }
 
         // Helper functions
