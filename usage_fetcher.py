@@ -69,6 +69,22 @@ SYNC_UPDATE_END = re.compile(r'\x1b\[\?2026l')
 # Minimum "% used" occurrences we consider a complete render.
 MIN_COMPLETE_QUOTAS = 3
 
+# On a Max plan a complete reading has exactly these three quotas. Anything less
+# means the PTY render was partial/glitched (timing-sensitive — see project memory).
+EXPECTED_QUOTA_KEYS = {('session', ''), ('weekly', ''), ('model_specific', 'sonnet')}
+
+# Read-loop idle timeouts. The quota bars come from a separate, sometimes-laggy
+# server call that renders LAST in the /usage view — after the "What's
+# contributing" breakdown. While we're on the usage screen but haven't yet seen
+# all quota markers, keep waiting up to IDLE_USAGE_TIMEOUT for them instead of
+# bailing at the short IDLE_TIMEOUT used for other (auth/unknown) screens. The
+# old hard 2s idle break was the cause of intermittent missing-quota snapshots.
+IDLE_TIMEOUT = 2.0
+IDLE_USAGE_TIMEOUT = 15.0
+# "Loading usage data…" prints contiguously even though most of the view is
+# column-positioned; its presence means we're rendering the usage screen.
+USAGE_SCREEN_MARKER = re.compile(r'Loading')
+
 # Quota section boundaries (to stop searching for reset time)
 QUOTA_BOUNDARIES = ['current session', 'current week', 'opus', 'sonnet']
 
@@ -450,6 +466,53 @@ def _reap(pid: int, master_fd: int) -> None:
         pass
 
 
+def incomplete_reason(result: Dict[str, Any]) -> Optional[str]:
+    """Return a short reason string if a fetched result looks incomplete/glitched,
+    else None. Used to decide whether to keep a raw dump for later diagnosis."""
+    if 'error' in result:
+        return 'error:' + str(result.get('auth_error_type') or result.get('details', '?'))[:40]
+    quotas = result.get('quotas') or []
+    keys = {(q.get('type'), q.get('model', '')) for q in quotas}
+    missing = EXPECTED_QUOTA_KEYS - keys
+    if missing:
+        return 'missing:' + ','.join(sorted(
+            f"{t}/{m}" if m else t for t, m in missing))
+    if result.get('account_type') == 'unknown':
+        return 'account_unknown'
+    return None
+
+
+def _dump_raw_debug(raw_bytes: bytes, clean_text: str,
+                    result: Dict[str, Any], reason: str) -> None:
+    """Persist the raw PTY bytes + emulated text + parsed result of a suspect
+    reading so a later session can see exactly what the parser was fed.
+
+    Controlled by env CLAUDE_USAGE_RAW_DIR (set by collect_history.sh). No-op if
+    unset, so local/dev runs and tests are unaffected. Never raises — diagnostics
+    must not break collection."""
+    raw_dir = os.environ.get('CLAUDE_USAGE_RAW_DIR')
+    if not raw_dir:
+        return
+    try:
+        os.makedirs(raw_dir, exist_ok=True)
+        stamp = (result.get('captured_at') or
+                 datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        safe = re.sub(r'[^0-9A-Za-z]', '', stamp)  # 20260604T110406Z -> filename-safe
+        base = os.path.join(raw_dir, safe)
+        with open(base + '.raw', 'wb') as f:
+            f.write(raw_bytes)
+        with open(base + '.debug.txt', 'w', encoding='utf-8') as f:
+            f.write(f"reason: {reason}\n")
+            f.write(f"captured_at: {stamp}\n")
+            f.write(f"parsed: {json.dumps(result, ensure_ascii=False)}\n")
+            f.write("===== EMULATED CLEAN TEXT =====\n")
+            f.write(clean_text + "\n")
+        print(f"[usage_fetcher] saved raw debug ({reason}) -> {base}.raw",
+              file=sys.stderr)
+    except Exception as e:  # diagnostics are best-effort
+        print(f"[usage_fetcher] raw debug dump failed: {e}", file=sys.stderr)
+
+
 def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
     """
     Fetch usage data from claude CLI.
@@ -498,10 +561,11 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
                 output += data
                 last_data_time = time.time()
 
-                # Detect completeness on the raw buffer — Claude prints
-                # "N%<ESC>[1Cused", so a literal "% used" substring never matches.
-                # End the loop as soon as we see a sync-update termination after
-                # the 3rd "% used"; waiting longer only lets diff frames overwrite labels.
+                # Detect completeness on the raw buffer — Claude separates the
+                # percent from "used" with a cursor-move escape (RAW_PCT_USED_PATTERN),
+                # so a literal "% used" substring never matches. End the loop as soon
+                # as we see a sync-update termination after the 3rd quota marker;
+                # waiting longer only lets diff frames overwrite labels.
                 if not complete_detected:
                     text = output.decode('utf-8', errors='replace')
                     if len(RAW_PCT_USED_PATTERN.findall(text)) >= MIN_COMPLETE_QUOTAS:
@@ -513,11 +577,18 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
                         log.debug('complete data detected, %d bytes, %.2fs elapsed',
                                   len(output), time.time() - start_time)
                         break
-            elif last_data_time and time.time() - last_data_time > 2.0:
-                # Idle timeout — claude went quiet without emitting the markers we
-                # expect (auth error, setup wizard, unknown layout). Give up and parse what we have.
-                log.debug('idle timeout, %d bytes', len(output))
-                break
+            elif last_data_time and time.time() - last_data_time > IDLE_TIMEOUT:
+                idle = time.time() - last_data_time
+                text = output.decode('utf-8', errors='replace')
+                on_usage_screen = USAGE_SCREEN_MARKER.search(text) is not None
+                # On the usage screen the quota bars arrive last and can lag a few
+                # seconds behind the rest of the view; don't give up in that gap.
+                # Bail fast only for non-usage screens (auth error, setup wizard,
+                # unknown layout) or after a long stall with no quotas at all.
+                if not on_usage_screen or idle > IDLE_USAGE_TIMEOUT:
+                    log.debug('idle timeout (%.1fs, usage_screen=%s), %d bytes',
+                              idle, on_usage_screen, len(output))
+                    break
 
         if time.time() - start_time >= timeout:
             log.debug('overall timeout reached, %d bytes', len(output))
@@ -534,23 +605,34 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
         # Check for auth errors first
         auth_error = detect_auth_error(clean_output)
         if auth_error:
-            return {
+            result = {
                 'error': 'Authentication error',
                 'auth_error_type': auth_error,
                 'details': f'Claude CLI returned: {auth_error}'
             }
+            _dump_raw_debug(output, clean_output, result, 'auth_error')
+            return result
 
         quotas = parse_quotas(clean_output)
 
         if not quotas:
             log.debug('no quotas parsed; clean output was:\n%s', clean_output)
 
-        return {
+        result = {
             'account_type': detect_account_type(clean_output),
             'email': parse_email(clean_output),
             'quotas': quotas,
             'captured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         }
+
+        # Keep raw bytes of suspect readings so a later session can see what the
+        # parser was fed (the PTY render is timing-sensitive — occasional frames
+        # drop a quota row or bleed reset lines across sections).
+        reason = incomplete_reason(result)
+        if reason:
+            _dump_raw_debug(output, clean_output, result, reason)
+
+        return result
 
     except Exception as e:
         return {

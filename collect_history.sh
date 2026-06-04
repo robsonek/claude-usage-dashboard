@@ -19,7 +19,10 @@ if [ ! -x "$VENV_PYTHON" ]; then
     exit 1
 fi
 
-# Fetch data using usage_fetcher.py — stderr goes to the cron log, not /dev/null
+# Fetch data using usage_fetcher.py — stderr goes to the cron log, not /dev/null.
+# CLAUDE_USAGE_RAW_DIR: fetcher dumps raw PTY bytes here only for incomplete/glitched
+# readings, so we can diagnose what went wrong after the fact.
+export CLAUDE_USAGE_RAW_DIR="$DATA_DIR/raw_debug"
 USAGE_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/usage_fetcher.py")
 FETCH_STATUS=$?
 
