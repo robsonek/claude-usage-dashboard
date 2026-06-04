@@ -1,5 +1,8 @@
 # Claude Usage Dashboard
 
+[![tests](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/tests.yml/badge.svg)](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/tests.yml)
+[![secret-scan](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/secret-scan.yml)
+
 Web dashboard for monitoring Claude Code CLI usage with charts and prediction.
 
 ![Dashboard Screenshot](screenshot-dark.png#gh-dark-mode-only)
