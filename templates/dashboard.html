@@ -446,11 +446,12 @@
                 chartWeekly.$resetMarkerLines = extractResetMarkers(weeklyData);
                 chartWeekly.update();
 
-                // Session period is ~5h, so long ranges pile ~5h ramps into an
-                // unreadable forest. Past ~20 periods in view (≈7d+), collapse to a
-                // daily-peak envelope (one max point per day) and drop the now-
-                // meaningless per-period Target + reset markers.
-                if (currentTimeRange / 5 > 20) {
+                // Session period is ~5h, so the 1-month range piles ~144 ramps into
+                // an unreadable forest. ONLY at 1m (720h), collapse session usage to
+                // a daily-peak envelope (one max point per day) and drop the now-
+                // meaningless per-period Target + reset markers. Shorter ranges
+                // (≤14d) keep the raw view + Target.
+                if (currentTimeRange >= 720) {
                     chartSession.data.datasets[0].data = dailyPeakEnvelope(sessionData);
                     chartSession.data.datasets[0].label = 'Daily peak';
                     chartSession.data.datasets[1].data = [];
