@@ -1,5 +1,7 @@
 """Claude Usage Dashboard - Flask Application"""
 import os
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
@@ -29,6 +31,28 @@ if (config.SECRET_KEY_IS_DEFAULT or config.PASSWORD_IS_DEFAULT) and \
     raise RuntimeError(
         "Refusing to start with default FLASK_SECRET_KEY / DASHBOARD_PASSWORD. "
         "Set both environment variables (or ALLOW_DEFAULT_CREDENTIALS=1 for local dev).")
+
+# Best-effort in-process login throttle (per client IP). With multiple gunicorn
+# workers this is per-worker, so the effective limit is N_workers × _LOGIN_MAX_FAILS
+# and it resets on restart — a basic brake on brute force, not a replacement for a
+# shared store / fail2ban at the edge.
+_LOGIN_MAX_FAILS = 5
+_LOGIN_WINDOW_SECONDS = 300
+_login_fails = defaultdict(list)
+
+
+def _client_ip() -> str:
+    fwd = request.headers.get('X-Forwarded-For', '')
+    if fwd:
+        return fwd.split(',')[0].strip()
+    return request.remote_addr or 'unknown'
+
+
+def _login_blocked(ip: str) -> bool:
+    now = time.time()
+    recent = [t for t in _login_fails[ip] if now - t < _LOGIN_WINDOW_SECONDS]
+    _login_fails[ip] = recent
+    return len(recent) >= _LOGIN_MAX_FAILS
 
 # Global database instance
 _db = None
@@ -70,7 +94,7 @@ def calculate_prediction(history, limit_type='weekly'):
 
     Args:
         history: List of history records
-        limit_type: 'weekly', 'daily', or 'model_specific'
+        limit_type: 'weekly', 'session', or 'model_specific'
 
     Returns:
         dict with prediction or None
@@ -155,9 +179,9 @@ def calculate_prediction(history, limit_type='weekly'):
                 usages.append(100 - remaining)
                 times.append(ts.timestamp())
             elif limit_type == 'session':
-                session = limits.get('session', {})
-                remaining = session.get('percent_remaining')
-                record_resets_at = session.get('resets_at')
+                session_limit = limits.get('session', {})
+                remaining = session_limit.get('percent_remaining')
+                record_resets_at = session_limit.get('resets_at')
                 if remaining is None:
                     continue  # Skip records without data
                 if not is_same_period(record_resets_at):
@@ -265,12 +289,18 @@ def login():
     """Login page"""
     error = None
     if request.method == 'POST':
+        ip = _client_ip()
+        if _login_blocked(ip):
+            return render_template('login.html',
+                                   error='Too many attempts. Try again later.'), 429
         username = request.form.get('username', '')
         password = request.form.get('password', '')
         if username == config.USERNAME and check_password_hash(config.PASSWORD_HASH, password):
+            _login_fails.pop(ip, None)
             session.permanent = True
             session['logged_in'] = True
             return redirect(url_for('dashboard'))
+        _login_fails[ip].append(time.time())
         error = 'Invalid username or password'
     return render_template('login.html', error=error)
 
@@ -304,6 +334,8 @@ def api_current():
 def api_history():
     """Returns historical data"""
     hours = request.args.get('hours', type=int)
+    if hours is not None:
+        hours = max(1, min(hours, 24 * 90))  # clamp to [1h, 90d]
     history = load_history(hours=hours)
     return jsonify(history)
 
@@ -328,4 +360,4 @@ if __name__ == '__main__':
     os.makedirs(config.DATA_DIR, exist_ok=True)
 
     # Run development server
-    app.run(debug=True, host='127.0.0.1', port=5000)
+    app.run(debug=os.environ.get('FLASK_DEBUG') == '1', host='127.0.0.1', port=5000)
