@@ -59,3 +59,16 @@ def test_login_has_no_theme_toggle():
     assert "theme-toggle" not in html
     assert "toggleTheme" not in html
     assert "data-theme" not in html
+
+
+def test_status_color_is_forecast_aware():
+    html = _read("templates/dashboard.html")
+    assert "setStatusForecast" in html
+    assert "applyStatusColor" in html
+    assert "willExceed" in html
+
+
+def test_ui_text_is_english():
+    html = _read("templates/dashboard.html")
+    for pl in ("temu", "teraz", "Wiek ostatniego"):
+        assert pl not in html, f"Polish text leaked: {pl}"

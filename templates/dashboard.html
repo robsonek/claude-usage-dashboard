@@ -14,7 +14,7 @@
         <header>
             <h1>🤖 Claude Usage Dashboard</h1>
             <div class="header-actions">
-                <span class="freshness" id="freshness" title="Wiek ostatniego snapshotu">
+                <span class="freshness" id="freshness" title="Age of last snapshot">
                     <span class="fresh-dot" id="fresh-dot"></span>
                     <span id="fresh-text">--</span>
                 </span>
@@ -305,19 +305,39 @@
             });
         }
 
-        // Fill one status card. `used` drives the big number, the bar width/color
-        // (via getProgressClass), the card class (colors the dot), and "% left".
-        function setStatusCard(prefix, cardId, q) {
+        // Combined per-quota signals that color the status card: current usage
+        // level AND the prediction. Green only when usage is low AND not projected
+        // to exceed; a forecast overage escalates to at least amber, even at low %.
+        // The big number + bar length still show true current usage.
+        const SEVERITY = { ok: 0, warning: 1, critical: 2 };
+        const statusState = {
+            weekly:  { used: null, willExceed: false, cardId: 'card-weekly',  barId: 'weekly-progress' },
+            session: { used: null, willExceed: false, cardId: 'card-session', barId: 'session-progress' },
+            model:   { used: null, willExceed: false, cardId: 'card-model',   barId: 'model-progress' }
+        };
+
+        function applyStatusColor(key) {
+            const s = statusState[key];
+            if (s.used === null) return;
+            let cls = getProgressClass(s.used);
+            if (s.willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
+            const card = document.getElementById(s.cardId);
+            if (card) card.className = 'status-card ' + cls;
+            const bar = document.getElementById(s.barId);
+            if (bar) bar.className = 'progress-bar ' + cls;
+        }
+
+        // Fill one status card. `used` drives the big number and bar length;
+        // the card/bar color comes from applyStatusColor (usage + forecast).
+        function setStatusCard(prefix, q) {
             if (!q) return;
             const used = 100 - (q.percent_remaining || 0);
-            const cls = getProgressClass(used);
-            document.getElementById(cardId).className = 'status-card ' + cls;
+            statusState[prefix].used = used;
             document.getElementById(prefix + '-used').textContent = used.toFixed(1);
-            const bar = document.getElementById(prefix + '-progress');
-            bar.style.width = used + '%';
-            bar.className = 'progress-bar ' + cls;
+            document.getElementById(prefix + '-progress').style.width = used + '%';
             document.getElementById(prefix + '-remaining').textContent = (100 - used).toFixed(1) + '% left';
             document.getElementById(prefix + '-reset').textContent = 'reset ' + formatDate(q.resets_at);
+            applyStatusColor(prefix);
         }
 
         async function updateCurrentStatus() {
@@ -333,14 +353,14 @@
 
                 const limits = data.limits || {};
 
-                setStatusCard('weekly', 'card-weekly', limits.weekly);
-                setStatusCard('session', 'card-session', limits.session);
+                setStatusCard('weekly', limits.weekly);
+                setStatusCard('session', limits.session);
 
                 if (limits.model_specific) {
                     const m = limits.model_specific.model;
                     document.getElementById('model-title').textContent =
                         (m ? m.charAt(0).toUpperCase() + m.slice(1) : 'Model') + ' · 168h';
-                    setStatusCard('model', 'card-model', limits.model_specific);
+                    setStatusCard('model', limits.model_specific);
                 }
 
                 document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
@@ -492,6 +512,10 @@
                 setStatusTrend('weekly-trend', predictions.weekly);
                 setStatusTrend('session-trend', predictions.session);
                 setStatusTrend('model-trend', predictions.model_specific);
+
+                setStatusForecast('weekly', predictions.weekly);
+                setStatusForecast('session', predictions.session);
+                setStatusForecast('model', predictions.model_specific);
             } catch (error) {
                 console.error('Error loading predictions:', error);
             }
@@ -510,6 +534,14 @@
             const t = prediction.trend_per_hour;
             const arrow = t > 0 ? '▲' : (t < 0 ? '▼' : '■');
             el.textContent = `${arrow} ${Math.abs(t)}%/h`;
+        }
+
+        // Let the prediction's overage warning color the status card too, so a
+        // green "all good" card never sits above a red "will exceed" badge.
+        function setStatusForecast(key, prediction) {
+            statusState[key].willExceed = !!(prediction && !prediction.stale_data
+                && !prediction.low_confidence && prediction.will_exceed);
+            applyStatusColor(key);
         }
 
         function predKv(prediction, opts) {
@@ -606,9 +638,9 @@
             if (ageMin > 30) cls = 'dead';
             else if (ageMin >= 12) cls = 'stale';
             box.className = 'freshness ' + cls;
-            txt.textContent = ageMin < 1 ? 'teraz'
-                : ageMin < 60 ? `${ageMin}m temu`
-                : `${Math.floor(ageMin / 60)}h temu`;
+            txt.textContent = ageMin < 1 ? 'now'
+                : ageMin < 60 ? `${ageMin}m ago`
+                : `${Math.floor(ageMin / 60)}h ago`;
         }
 
         function formatDate(isoString) {
