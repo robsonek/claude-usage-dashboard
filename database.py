@@ -52,6 +52,13 @@ class UsageDatabase:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # WAL + a busy_timeout so the 5-min collector writes and the web app's
+        # reads don't intermittently fail with 'database is locked'. WAL lets a
+        # reader and a writer proceed concurrently; synchronous=NORMAL is safe
+        # under WAL and avoids an fsync per write.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self._create_tables()
 
     def _create_tables(self):
