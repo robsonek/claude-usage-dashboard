@@ -52,3 +52,10 @@ def test_chart_colors_swapped_to_palette():
     assert "#3498db" not in html  # old blue removed
     assert "#9b59b6" not in html  # old purple removed
     assert "Sonnet Usage (% used)" in html
+
+
+def test_login_has_no_theme_toggle():
+    html = _read("templates/login.html")
+    assert "theme-toggle" not in html
+    assert "toggleTheme" not in html
+    assert "data-theme" not in html
