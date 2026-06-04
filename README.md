@@ -5,8 +5,7 @@
 
 Web dashboard for monitoring Claude Code CLI usage with charts and prediction.
 
-![Dashboard Screenshot](screenshot-dark.png#gh-dark-mode-only)
-![Dashboard Screenshot](screenshot-light.png#gh-light-mode-only)
+![Dashboard Screenshot](screenshot-dark.png)
 
 ## Deployment Guide
 
