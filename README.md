@@ -63,6 +63,7 @@ Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/YOUR_USERNAME/claude-dashboard
 Environment=PATH=/home/YOUR_USERNAME/claude-dashboard/venv/bin:/usr/bin
+EnvironmentFile=/home/YOUR_USERNAME/claude-dashboard/.env
 ExecStart=/home/YOUR_USERNAME/claude-dashboard/venv/bin/gunicorn --bind 127.0.0.1:5050 --workers 2 app:app
 Restart=always
 RestartSec=5
@@ -70,6 +71,13 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Required before first start:** the dashboard *fails closed* and will refuse
+> to boot until `FLASK_SECRET_KEY` and `DASHBOARD_PASSWORD` are provided — via the
+> `EnvironmentFile` above (a `.env` of `KEY=value` lines) or `Environment=` lines.
+> See [Configuration](#configuration). If gunicorn keeps restarting right after
+> deploy, this is almost always the cause (`journalctl -u claude-dashboard -e`
+> shows `RuntimeError: Refusing to start ...`).
 
 Enable and start the service:
 
@@ -147,15 +155,24 @@ Expected response: HTTP 302 redirect to login page.
 
 ## Configuration
 
-Set environment variables in the systemd service file (the app does not
-read `.env` files) by adding `Environment=KEY=value` lines under
-`[Service]`:
+The app reads configuration from environment variables. It does **not** parse
+`.env` files itself, so hand them to the gunicorn process either with
+`Environment=KEY=value` lines under `[Service]`, or by pointing the unit at an env
+file (`EnvironmentFile=/home/YOUR_USERNAME/claude-dashboard/.env`, see step 4)
+containing `KEY=value` lines — no `export`, no quotes needed.
+
+> **Fail-closed:** the dashboard refuses to start unless **both**
+> `FLASK_SECRET_KEY` and `DASHBOARD_PASSWORD` are set — otherwise it would run on
+> the built-in defaults and anyone could forge a logged-in session. For a throwaway
+> local run only, set `ALLOW_DEFAULT_CREDENTIALS=1` to bypass the guard.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| FLASK_SECRET_KEY | Session encryption key — **must be changed** | (insecure placeholder) |
+| FLASK_SECRET_KEY | Session signing key — **required** | (refuses to start) |
+| DASHBOARD_PASSWORD | Login password — **required** | (refuses to start) |
 | DASHBOARD_USERNAME | Login username | admin |
-| DASHBOARD_PASSWORD | Login password — **must be changed** | claude123 |
+| SESSION_COOKIE_SECURE | Set to `1` when served over HTTPS (Secure cookie) | 0 |
+| ALLOW_DEFAULT_CREDENTIALS | Set to `1` to allow built-in defaults (local dev only) | unset |
 | CLAUDE_BIN | Path to Claude CLI | claude |
 
 Generate a secure secret key with:
@@ -164,13 +181,18 @@ Generate a secure secret key with:
 python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
+After changing any variable, restart the service:
+`sudo systemctl restart claude-dashboard`.
+
 ## Upgrading an Existing Deployment
 
 The `quotas.period_start_at` column is added automatically on app startup,
 but historical rows are left at NULL. Without backfill, the chart's Target
 line and reset markers will only render correctly for snapshots captured
-*after* the upgrade. Run the one-shot backfill once to populate older
-rows using the same shift-vs-reset heuristic as live inserts:
+*after* the upgrade. Run the one-shot backfill once to populate older rows
+(it also repairs the occasional +24h reset-time glitch some Claude CLI
+versions emit at a reset boundary) using the same shift-vs-reset heuristic as
+live inserts:
 
 ```bash
 cd ~/claude-dashboard
@@ -178,11 +200,13 @@ venv/bin/python -c '
 from database import UsageDatabase
 import config
 db = UsageDatabase(config.DB_FILE)
-print(f"updated {db.backfill_period_start_at()} rows")
+r = db.backfill_period_start_at()
+print(f"period_start updated: {r[\"period_start_updates\"]}, "
+      f"resets_at sanitized: {r[\"resets_at_sanitized\"]}")
 '
 ```
 
-The script is idempotent — re-running it is a no-op once everything is
+The pass is idempotent — re-running it is a no-op once everything is
 consistent. Back up `usage.db` first if the deployment carries data you
 cannot afford to lose.
 
@@ -261,6 +285,12 @@ Typical causes and how to diagnose:
    ```bash
    tail -n 50 ~/claude-dashboard/cron.log
    ```
+
+   On a hard fetcher error the collector also **exits non-zero** (so a systemd
+   timer / monitoring sees the failure instead of a misleading success), and it
+   saves the raw PTY bytes + emulated text of any incomplete/glitched reading
+   under `data/raw_debug/` — inspect those to see exactly what the parser was
+   fed when a quota row goes missing after a Claude CLI update.
 
 ### `cron.log` grows indefinitely
 Add a logrotate rule at `/etc/logrotate.d/claude-dashboard`:
