@@ -31,9 +31,14 @@ if [ $FETCH_STATUS -ne 0 ] || [ -z "$USAGE_JSON" ]; then
     exit 1
 fi
 
-# Warn (don't fail) on fetch problems — the JSON is still written so we can inspect later
+# Warn (don't fail yet) on fetch problems — the JSON is still written so we can
+# inspect later. A hard fetcher error (e.g. auth) is persistent, so we record it
+# and exit non-zero at the very end (after artifacts are saved) so the timer unit
+# / monitoring actually sees the failure instead of a misleading success.
+FETCH_ERROR=0
 if echo "$USAGE_JSON" | grep -q '"error"'; then
     log "WARN: fetcher returned error: $(echo "$USAGE_JSON" | head -c 200)"
+    FETCH_ERROR=1
 elif echo "$USAGE_JSON" | grep -q '"quotas": \[\]'; then
     log "WARN: fetcher returned empty quotas"
 fi
@@ -41,8 +46,13 @@ fi
 # Save to JSON file (history / reproducibility)
 echo "$USAGE_JSON" > "$DAY_DIR/$TIME.json"
 
-# Save to SQLite database
+# Save to SQLite database (insert_to_db.py skips pure-error records itself)
 if ! echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py"; then
     log "ERROR: insert_to_db.py failed"
     exit 1
+fi
+
+# Surface a persistent fetch error to the timer/monitoring (artifacts already saved).
+if [ "$FETCH_ERROR" -ne 0 ]; then
+    exit 2
 fi
