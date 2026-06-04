@@ -54,7 +54,7 @@
             </div>
 
             <div class="status-card model">
-                <h3>Model Specific (Sonnet)</h3>
+                <h3 id="model-title">Model Specific</h3>
                 <div class="progress-container">
                     <div class="progress-bar" id="model-progress"></div>
                 </div>
@@ -328,6 +328,9 @@
                 // Model specific
                 if (limits.model_specific) {
                     const used = 100 - (limits.model_specific.percent_remaining || 0);
+                    const m = limits.model_specific.model;
+                    document.getElementById('model-title').textContent =
+                        m ? `Model Specific (${m.charAt(0).toUpperCase() + m.slice(1)})` : 'Model Specific';
                     document.getElementById('model-progress').style.width = used + '%';
                     document.getElementById('model-progress').className = 'progress-bar ' + getProgressClass(used);
                     document.getElementById('model-remaining').textContent = `${used.toFixed(1)}% used`;
@@ -349,12 +352,8 @@
                 currentTimeRange = hours;
             }
             try {
-                const [historyRes, currentRes] = await Promise.all([
-                    fetch(`/api/history?hours=${currentTimeRange}`),
-                    fetch('/api/current'),
-                ]);
+                const historyRes = await fetch(`/api/history?hours=${currentTimeRange}`);
                 const history = await historyRes.json();
-                const current = await currentRes.json();
 
                 if (!Array.isArray(history) || history.length === 0) {
                     console.log('No historical data');
@@ -415,40 +414,6 @@
             } catch (error) {
                 console.error('Error loading history:', error);
             }
-        }
-
-        // Calculate trend line - extrapolation to reset time
-        function calculateTrendLine(data, resetAt) {
-            if (data.length < 2 || !resetAt) return [];
-
-            const n = data.length;
-            const times = data.map(d => d.x.getTime());
-            const values = data.map(d => d.y);
-
-            const t0 = times[0];
-            const timesNorm = times.map(t => t - t0);
-
-            const sumT = timesNorm.reduce((a, b) => a + b, 0);
-            const sumV = values.reduce((a, b) => a + b, 0);
-            const sumTV = timesNorm.reduce((acc, t, i) => acc + t * values[i], 0);
-            const sumT2 = timesNorm.reduce((acc, t) => acc + t * t, 0);
-
-            const denom = n * sumT2 - sumT * sumT;
-            if (Math.abs(denom) < 1e-10) return [];
-
-            const a = (n * sumTV - sumT * sumV) / denom;
-            const b = (sumV - a * sumT) / n;
-
-            // Extrapolate to reset time
-            const resetTime = new Date(resetAt);
-            const resetTimeNorm = resetTime.getTime() - t0;
-            const predictedAtReset = a * resetTimeNorm + b;
-
-            // Line from last data point to predicted value at reset
-            return [
-                { x: data[n - 1].x, y: a * timesNorm[n - 1] + b },
-                { x: resetTime, y: predictedAtReset }
-            ];
         }
 
         // Calculate ideal usage line (even consumption from 0% at period start
