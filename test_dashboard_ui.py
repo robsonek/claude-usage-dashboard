@@ -20,3 +20,11 @@ def test_css_has_no_light_theme():
     css = _read("static/style.css")
     assert '[data-theme="light"]' not in css
     assert ".theme-toggle" not in css
+
+
+def test_dashboard_has_no_theme_toggle():
+    html = _read("templates/dashboard.html")
+    assert "theme-toggle" not in html
+    assert "toggleTheme" not in html
+    assert "data-theme" not in html
+    assert 'content="#0a0e12"' in html  # static dark meta color
