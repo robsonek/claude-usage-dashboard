@@ -28,3 +28,10 @@ def test_dashboard_has_no_theme_toggle():
     assert "toggleTheme" not in html
     assert "data-theme" not in html
     assert 'content="#0a0e12"' in html  # static dark meta color
+
+
+def test_dashboard_has_freshness_indicator():
+    html = _read("templates/dashboard.html")
+    assert 'id="freshness"' in html
+    assert 'id="fresh-text"' in html
+    assert "updateFreshness" in html

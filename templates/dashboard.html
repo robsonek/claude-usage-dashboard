@@ -14,6 +14,10 @@
         <header>
             <h1>🤖 Claude Usage Dashboard</h1>
             <div class="header-actions">
+                <span class="freshness" id="freshness" title="Wiek ostatniego snapshotu">
+                    <span class="fresh-dot" id="fresh-dot"></span>
+                    <span id="fresh-text">--</span>
+                </span>
                 <button id="refresh-btn" class="btn-refresh">↻ Refresh</button>
                 <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
             </div>
@@ -328,6 +332,7 @@
                 }
 
                 document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
+                updateFreshness(data.timestamp);
             } catch (error) {
                 console.error('Error:', error);
             }
@@ -566,6 +571,22 @@
             if (percent >= 90) return 'critical';
             if (percent >= 70) return 'warning';
             return 'ok';
+        }
+
+        // Freshness indicator: snapshots arrive every ~5 min. Green when fresh,
+        // amber when 2+ cycles late, red when the collector has clearly stalled.
+        function updateFreshness(ts) {
+            const box = document.getElementById('freshness');
+            const txt = document.getElementById('fresh-text');
+            if (!ts) { box.className = 'freshness'; txt.textContent = '--'; return; }
+            const ageMin = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 60000));
+            let cls = 'fresh';
+            if (ageMin > 30) cls = 'dead';
+            else if (ageMin >= 12) cls = 'stale';
+            box.className = 'freshness ' + cls;
+            txt.textContent = ageMin < 1 ? 'teraz'
+                : ageMin < 60 ? `${ageMin}m temu`
+                : `${Math.floor(ageMin / 60)}h temu`;
         }
 
         function formatDate(isoString) {
