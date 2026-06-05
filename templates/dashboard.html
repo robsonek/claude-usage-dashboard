@@ -12,7 +12,7 @@
 <body>
     <div class="dashboard">
         <header>
-            <h1>🤖 Claude Usage Dashboard</h1>
+            <h1>Claude Usage Dashboard</h1>
             <div class="header-actions">
                 <span class="version-badge" title="App version">v{{ version }}</span>
                 <span class="freshness" id="freshness" title="Age of last snapshot">
@@ -75,7 +75,7 @@
 
         <!-- Prediction panel -->
         <section class="prediction-panel">
-            <div class="section-label">📊 Prediction</div>
+            <div class="section-label">Prediction</div>
             <div class="predictions">
                 <div class="prediction-card" id="prediction-weekly">
                     <h4>Weekly</h4>
@@ -92,20 +92,21 @@
             </div>
         </section>
 
+        <!-- Time range -->
+        <div class="section-label">Time range</div>
+        <div class="chart-controls">
+            <button class="time-btn" data-hours="1">1h</button>
+            <button class="time-btn" data-hours="6">6h</button>
+            <button class="time-btn active" data-hours="24">24h</button>
+            <button class="time-btn" data-hours="72">3d</button>
+            <button class="time-btn" data-hours="168">7d</button>
+            <button class="time-btn" data-hours="336">14d</button>
+            <button class="time-btn" data-hours="720">1m</button>
+        </div>
+
         <!-- Charts -->
         <div class="section-label">Charts</div>
         <section class="charts">
-            <div class="chart-controls">
-                <span>Time range:</span>
-                <button class="time-btn" data-hours="1">1h</button>
-                <button class="time-btn" data-hours="6">6h</button>
-                <button class="time-btn active" data-hours="24">24h</button>
-                <button class="time-btn" data-hours="72">3d</button>
-                <button class="time-btn" data-hours="168">7d</button>
-                <button class="time-btn" data-hours="336">14d</button>
-                <button class="time-btn" data-hours="720">1m</button>
-            </div>
-
             <div class="chart-container">
                 <h2>Weekly Usage (% used)</h2>
                 <canvas id="chart-weekly"></canvas>
@@ -658,14 +659,14 @@
 
             if (prediction.stale_data) {
                 content.innerHTML =
-                    '<div class="pred-badge pending">🔄 Reset — waiting for data</div>' +
+                    '<div class="pred-badge pending">Reset — waiting for data</div>' +
                     predKv(prediction, { atReset: prediction.current_usage + '%', trend: '0%/h', to100: '∞' });
                 return;
             }
 
             if (prediction.low_confidence) {
                 content.innerHTML =
-                    '<div class="pred-badge pending">📊 Collecting…</div>' +
+                    '<div class="pred-badge pending">Collecting…</div>' +
                     predKv(prediction, {
                         atReset: prediction.current_usage + '%',
                         trend: (prediction.trend_per_hour !== null ? prediction.trend_per_hour + '%/h' : '0%/h'),
