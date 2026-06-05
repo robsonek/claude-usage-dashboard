@@ -2,6 +2,11 @@
 import os
 from werkzeug.security import generate_password_hash
 
+# App version — shown in the dashboard UI (header chip + footer). Single source
+# of truth. RULE: bump this (at least the patch level) on EVERY git push, so each
+# pushed/deployed state carries a unique version. See memory feedback_bump_version_on_push.
+VERSION = '1.0.0'
+
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')

@@ -291,7 +291,7 @@ def login():
     if request.method == 'POST':
         ip = _client_ip()
         if _login_blocked(ip):
-            return render_template('login.html',
+            return render_template('login.html', version=config.VERSION,
                                    error='Too many attempts. Try again later.'), 429
         username = request.form.get('username', '')
         password = request.form.get('password', '')
@@ -302,7 +302,7 @@ def login():
             return redirect(url_for('dashboard'))
         _login_fails[ip].append(time.time())
         error = 'Invalid username or password'
-    return render_template('login.html', error=error)
+    return render_template('login.html', error=error, version=config.VERSION)
 
 
 @app.route('/logout')
@@ -316,7 +316,7 @@ def logout():
 @login_required
 def dashboard():
     """Main dashboard"""
-    return render_template('dashboard.html')
+    return render_template('dashboard.html', version=config.VERSION)
 
 
 @app.route('/api/current')

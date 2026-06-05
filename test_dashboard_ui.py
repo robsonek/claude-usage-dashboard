@@ -1,4 +1,5 @@
 import os
+import re
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
@@ -80,6 +81,20 @@ def test_model_card_routed_through_setStatusCard_for_clearing():
     html = _read("templates/dashboard.html")
     assert "setStatusCard('model', limits.model_specific)" in html
     assert "setStaleBadge(prefix, null)" in html
+
+
+def test_app_version_is_shown_in_ui():
+    """The version is a valid semver in config and surfaced in both templates
+    (dashboard header chip + footer, login card)."""
+    import config
+    assert re.match(r'^\d+\.\d+\.\d+$', config.VERSION), config.VERSION
+    dash = _read("templates/dashboard.html")
+    assert 'class="version-badge"' in dash
+    assert dash.count("v{{ version }}") >= 2  # header chip + footer
+    login = _read("templates/login.html")
+    assert "{{ version }}" in login
+    css = _read("static/style.css")
+    assert ".version-badge" in css
 
 
 def test_login_has_no_theme_toggle():

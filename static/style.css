@@ -53,6 +53,10 @@ header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em}
 .freshness.dead{color:var(--crit)}
 .freshness.dead .fresh-dot{background:var(--crit);box-shadow:0 0 7px var(--crit)}
 
+/* Version badge (card-like chip, mirrors the freshness pill) */
+.version-badge{display:inline-flex;align-items:center;font-family:var(--mono);font-size:.72rem;color:var(--mid);border:1px solid var(--border);background:var(--panel);padding:5px 10px;border-radius:7px;letter-spacing:.03em}
+.login-version{text-align:center;margin-top:20px;color:var(--label);font-family:var(--mono);font-size:.68rem;letter-spacing:.06em}
+
 /* Buttons */
 .btn-refresh,.btn-logout{font-family:var(--mono);padding:6px 13px;border-radius:7px;font-size:.78rem;cursor:pointer;transition:all .15s;text-decoration:none;border:1px solid var(--border);background:var(--panel)}
 .btn-refresh{color:var(--accent);border-color:var(--accent-border);background:var(--accent-soft)}

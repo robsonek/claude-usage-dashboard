@@ -14,6 +14,7 @@
         <header>
             <h1>🤖 Claude Usage Dashboard</h1>
             <div class="header-actions">
+                <span class="version-badge" title="App version">v{{ version }}</span>
                 <span class="freshness" id="freshness" title="Age of last snapshot">
                     <span class="fresh-dot" id="fresh-dot"></span>
                     <span id="fresh-text">--</span>
@@ -122,7 +123,7 @@
         </section>
 
         <footer>
-            <p>Last update: <span id="last-update">--</span></p>
+            <p>Last update: <span id="last-update">--</span> · v{{ version }}</p>
         </footer>
     </div>
 
