@@ -33,9 +33,26 @@ def test_incomplete_on_usage_screen_waits_for_lagging_bars():
 
 
 def test_incomplete_off_usage_screen_bails_fast():
-    # Auth error / setup / unknown layout: no quotas coming, bail after IDLE_TIMEOUT.
-    assert _should_stop_reading(False, False, IDLE_TIMEOUT + 0.1, False) is True
-    assert _should_stop_reading(False, False, 1.0, False) is False        # under IDLE_TIMEOUT
+    # Auth error / setup / unknown layout: Claude HAS drawn a screen (ui_rendered)
+    # that simply isn't the usage view — no quotas coming, bail after IDLE_TIMEOUT.
+    assert _should_stop_reading(False, False, IDLE_TIMEOUT + 0.1, False, ui_rendered=True) is True
+    assert _should_stop_reading(False, False, 1.0, False, ui_rendered=True) is False   # under IDLE_TIMEOUT
+
+
+def test_no_ui_yet_does_not_bail_at_idle_timeout():
+    # The empty-capture bug: Claude emitted only its terminal-init escape burst
+    # (ui_rendered=False) and went quiet waiting on a terminal-capability reply we
+    # never send. The old code bailed at IDLE_TIMEOUT with an empty buffer because
+    # "not on_usage_screen" was true. Now "no UI drawn yet" counts as "still
+    # starting" — keep waiting instead of killing Claude before it renders.
+    assert _should_stop_reading(False, False, IDLE_TIMEOUT + 0.1, False, ui_rendered=False) is False
+    assert _should_stop_reading(False, False, 5.0, False, ui_rendered=False) is False
+
+
+def test_no_ui_eventually_bails_at_usage_timeout():
+    # Genuinely hung start (Claude never draws anything): give up at
+    # IDLE_USAGE_TIMEOUT so a stuck child can't pin the loop to the overall timeout.
+    assert _should_stop_reading(False, False, IDLE_USAGE_TIMEOUT + 0.1, False, ui_rendered=False) is True
 
 
 def test_no_data_yet_never_stops():

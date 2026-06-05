@@ -56,7 +56,8 @@ fi
 TMP_JSON="$DAY_DIR/.$TIME.$$.json"
 printf '%s\n' "$USAGE_JSON" > "$TMP_JSON" && mv -f "$TMP_JSON" "$DAY_DIR/$TIME.json"
 
-# Save to SQLite database (insert_to_db.py skips pure-error records itself)
+# Save to SQLite database (insert_to_db.py skips pure-error AND empty-quota records
+# itself — a glitched read with no quotas isn't persisted, only the JSON/raw_debug above)
 if ! echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py"; then
     log "ERROR: insert_to_db.py failed"
     exit 1

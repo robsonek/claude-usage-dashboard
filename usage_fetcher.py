@@ -84,6 +84,15 @@ IDLE_USAGE_TIMEOUT = 15.0
 # "Loading usage data…" prints contiguously even though most of the view is
 # column-positioned; its presence means we're rendering the usage screen.
 USAGE_SCREEN_MARKER = re.compile(r'Loading')
+# Has Claude drawn *any* UI yet? On startup it first emits only a terminal-init
+# escape burst (save/restore cursor, bracketed-paste/focus modes, an XTVERSION
+# `\x1b[>0q` and a Primary-DA `\x1b[c` query) and then waits for the terminal to
+# answer those queries — a reply our PTY reader never sends. Matched against the
+# EMULATED text (OSC title is stripped there, so the window-title "Claude Code"
+# doesn't count): "Claude" appears only once the splash header is actually painted.
+# Until then an idle gap means "still starting up", not "settled on a non-usage
+# screen" — see _should_stop_reading. This is the empty-capture (quotas: []) fix.
+UI_RENDERED_MARKER = re.compile(r'Claude')
 
 # Quota section boundaries (to stop searching for reset time)
 QUOTA_BOUNDARIES = ['current session', 'current week', 'opus', 'sonnet']
@@ -527,7 +536,8 @@ def _dump_raw_debug(raw_bytes: bytes, clean_text: str,
 
 
 def _should_stop_reading(complete_detected: bool, sync_end_after_quotas: bool,
-                         idle_seconds: float, on_usage_screen: bool) -> bool:
+                         idle_seconds: float, on_usage_screen: bool,
+                         ui_rendered: bool = True) -> bool:
     """Decide whether the PTY read loop has captured a usable /usage frame.
 
     - All quota markers present *and* the synchronized-output end after them →
@@ -536,16 +546,24 @@ def _should_stop_reading(complete_detected: bool, sync_end_after_quotas: bool,
       re-emit it after the late-rendering quota bars) → stop once the render has
       settled (no new bytes for >= IDLE_TIMEOUT), instead of sitting out the full
       IDLE_USAGE_TIMEOUT. This is what kept every fetch at ~17.5s.
-    - Not complete yet: on the usage screen the bars may still be arriving, so wait
-      up to IDLE_USAGE_TIMEOUT; on any other screen (auth error / setup / unknown)
-      bail after the short IDLE_TIMEOUT.
+    - Not complete yet, idle past IDLE_TIMEOUT: bail fast ONLY when Claude has
+      drawn a screen that definitively isn't the usage view (`ui_rendered and not
+      on_usage_screen` — an auth error / setup / unknown layout). If Claude hasn't
+      painted ANY UI yet (`ui_rendered` false — only the terminal-init escape burst,
+      while it waits on a terminal-capability reply we never send), treat it as
+      "still starting" and keep waiting up to IDLE_USAGE_TIMEOUT rather than killing
+      it with an empty buffer. The old code bailed here at IDLE_TIMEOUT and produced
+      the empty (quotas: []) snapshots.
     """
     if complete_detected and sync_end_after_quotas:
         return True
     if complete_detected and idle_seconds >= IDLE_TIMEOUT:
         return True
-    if idle_seconds >= IDLE_TIMEOUT and (not on_usage_screen or idle_seconds > IDLE_USAGE_TIMEOUT):
-        return True
+    if idle_seconds >= IDLE_TIMEOUT:
+        if ui_rendered and not on_usage_screen:
+            return True
+        if idle_seconds > IDLE_USAGE_TIMEOUT:
+            return True
     return False
 
 
@@ -609,8 +627,12 @@ def fetch_usage(timeout: int = 30) -> Dict[str, Any]:
             idle = time.time() - last_data_time
             sync_end = complete_detected and bool(SYNC_UPDATE_END.search(text, _cut_search_start(text)))
             on_usage_screen = USAGE_SCREEN_MARKER.search(text) is not None
+            # ui_rendered: has Claude painted any screen yet? Emulate (strips the OSC
+            # window-title so it doesn't false-positive on "Claude Code") and look for
+            # the splash header. Until it's drawn, an idle gap is startup, not a dead end.
+            ui_rendered = UI_RENDERED_MARKER.search(emulate_terminal(text)) is not None
 
-            if _should_stop_reading(complete_detected, sync_end, idle, on_usage_screen):
+            if _should_stop_reading(complete_detected, sync_end, idle, on_usage_screen, ui_rendered):
                 log.debug('stop: complete=%s sync_end=%s idle=%.1fs usage=%s, %d bytes, %.2fs',
                           complete_detected, sync_end, idle, on_usage_screen,
                           len(output), time.time() - start_time)
