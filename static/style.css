@@ -108,7 +108,7 @@ header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em}
 .no-data{color:var(--label);font-style:italic;font-family:var(--mono);font-size:.78rem}
 
 /* Chart controls */
-.chart-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:var(--panel);border-radius:9px}
+.chart-controls{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:var(--panel);border-radius:9px}
 .chart-controls span{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--label);margin-right:4px}
 .time-btn{font-family:var(--mono);padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--mid);cursor:pointer;font-size:.72rem;transition:all .15s}
 .time-btn:hover{border-color:var(--accent-border);color:var(--accent)}
