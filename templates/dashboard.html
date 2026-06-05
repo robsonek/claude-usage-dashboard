@@ -29,7 +29,7 @@
         <section class="current-status">
             <div class="status-card" id="card-weekly">
                 <div class="status-head">
-                    <span class="status-name"><span class="dot"></span>Weekly · 168h</span>
+                    <span class="status-name"><span class="dot"></span>Weekly · 7d</span>
                     <span class="status-trend" id="weekly-trend"></span>
                 </div>
                 <div class="status-value"><span id="weekly-used">--</span><span class="u">% used</span><span class="stale-badge" id="weekly-stale" hidden></span></div>
@@ -59,7 +59,7 @@
 
             <div class="status-card" id="card-model">
                 <div class="status-head">
-                    <span class="status-name"><span class="dot"></span><span id="model-title">Sonnet · 168h</span></span>
+                    <span class="status-name"><span class="dot"></span><span id="model-title">Sonnet · 7d</span></span>
                     <span class="status-trend" id="model-trend"></span>
                 </div>
                 <div class="status-value"><span id="model-used">--</span><span class="u">% used</span><span class="stale-badge" id="model-stale" hidden></span></div>
@@ -102,6 +102,7 @@
             <button class="time-btn" data-hours="168">7d</button>
             <button class="time-btn" data-hours="336">14d</button>
             <button class="time-btn" data-hours="720">1m</button>
+            <button class="time-btn" data-hours="1440">2m</button>
         </div>
 
         <!-- Charts -->
@@ -432,7 +433,7 @@
                 const m = limits.model_specific && limits.model_specific.model;
                 if (m) {
                     document.getElementById('model-title').textContent =
-                        m.charAt(0).toUpperCase() + m.slice(1) + ' · 168h';
+                        m.charAt(0).toUpperCase() + m.slice(1) + ' · 7d';
                 }
                 setStatusCard('model', limits.model_specific);
 

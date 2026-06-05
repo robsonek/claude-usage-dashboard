@@ -84,15 +84,16 @@ def test_model_card_routed_through_setStatusCard_for_clearing():
 
 
 def test_app_version_is_shown_in_ui():
-    """The version is a valid semver in config and surfaced in both templates
-    (dashboard header chip + footer, login card)."""
+    """The version is a valid semver in config and surfaced in the dashboard only
+    (header chip + footer) — intentionally NOT on the login screen."""
     import config
     assert re.match(r'^\d+\.\d+\.\d+$', config.VERSION), config.VERSION
     dash = _read("templates/dashboard.html")
     assert 'class="version-badge"' in dash
     assert dash.count("v{{ version }}") >= 2  # header chip + footer
     login = _read("templates/login.html")
-    assert "{{ version }}" in login
+    assert "{{ version }}" not in login   # version is dashboard-only (post-login)
+    assert "login-version" not in login
     css = _read("static/style.css")
     assert ".version-badge" in css
 
