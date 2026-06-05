@@ -65,7 +65,7 @@ header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em}
 
 /* Status cards */
 .current-status{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:26px}
-.status-card{background:var(--panel);border-radius:9px;padding:15px 16px}
+.status-card{background:var(--panel);border-radius:9px;padding:15px 16px;overflow:hidden}
 .status-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9px}
 .status-name{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--label);display:flex;align-items:center}
 .status-name .dot{width:7px;height:7px;border-radius:50%;background:var(--mid);margin-right:7px;flex:none}
@@ -75,6 +75,10 @@ header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em}
 .status-trend{font-family:var(--mono);font-size:.62rem;color:var(--mid)}
 .status-value{font-family:var(--mono);font-weight:700;font-size:1.9rem;letter-spacing:-.02em;color:var(--text);display:flex;align-items:baseline;gap:7px;margin-bottom:11px}
 .status-value .u{font-size:.8rem;color:var(--label);font-weight:400}
+/* "Last known value" marker shown when a glitched read fell back to the previous reading */
+.stale-badge{margin-left:auto;align-self:center;font-family:var(--mono);font-size:.58rem;font-weight:600;letter-spacing:.06em;color:var(--warn);background:rgba(245,165,36,.12);border:1px solid rgba(245,165,36,.32);padding:2px 7px;border-radius:5px;white-space:nowrap;cursor:default}
+.status-card.is-stale{box-shadow:inset 2px 0 0 rgba(245,165,36,.55)}
+.status-card.is-stale .status-value>span:first-child{opacity:.7}
 .progress-container{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;margin-bottom:9px}
 .progress-bar{height:100%;border-radius:3px;transition:width .5s ease;background:var(--mid)}
 .progress-bar.ok{background:var(--ok)}

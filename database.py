@@ -43,6 +43,15 @@ _RESET_EQUIVALENCE_SECONDS = 1800
 # period_start_at for the whole following period.
 _RESETS_AHEAD_MARGIN_HOURS = 1
 
+# Quota types a complete reading always contains. When the latest snapshot is
+# missing one (a partial/glitched PTY render dropped the row — most often the
+# late-rendering Sonnet per-model quota), get_current() carries the most recent
+# earlier value forward and tags it stale=True, so the status card shows the
+# last known number with a marker instead of going blank. Only the /api/current
+# view falls back; get_history / predictions stay strictly truthful (no
+# synthetic rows are ever written to the DB).
+_FALLBACK_QUOTA_TYPES = ('weekly', 'session', 'model_specific')
+
 
 class UsageDatabase:
     """Data Access Layer for usage snapshots stored in SQLite."""
@@ -288,7 +297,7 @@ class UsageDatabase:
         cursor.execute("""
             SELECT id, captured_at, account_type, email
             FROM snapshots
-            ORDER BY captured_at DESC
+            ORDER BY captured_at DESC, id DESC
             LIMIT 1
         """)
 
@@ -296,7 +305,9 @@ class UsageDatabase:
         if not row:
             return None
 
-        return self._snapshot_to_dict(row)
+        result = self._snapshot_to_dict(row)
+        self._fill_missing_quotas(result['limits'], row['id'], row['captured_at'])
+        return result
 
     def get_history(self, hours: Optional[int] = None) -> List[Dict[str, Any]]:
         """
@@ -363,6 +374,58 @@ class UsageDatabase:
             'account_type': row['account_type'],
             'email': row['email']
         }
+
+    def _fill_missing_quotas(self, limits: Dict[str, Any],
+                             snapshot_id: int, captured_at) -> None:
+        """Carry the last known value forward for any expected quota missing from
+        the latest snapshot, tagging it stale. Mutates `limits` in place.
+
+        A partial/glitched PTY render occasionally drops a quota row (most often
+        the late-rendering Sonnet per-model bar), so the latest snapshot has e.g.
+        weekly+session but no model_specific and the status card goes blank. For
+        the current-status view only, fill each missing expected quota from the
+        most recent earlier snapshot that had it, marking it `stale=True` with the
+        source reading's timestamp (`stale_since`). Nothing is written back, so
+        history charts and predictions keep using only real readings.
+
+        Three correctness guards:
+        - Anchor on `snapshot_id` (`s.id < ?`), not captured_at, so a same-second
+          earlier snapshot can still backfill the chosen (higher-id) glitch row.
+        - For model_specific prefer the Sonnet row (the status card is always
+          Sonnet; never carry a stray Opus value), with `q.id DESC` as a
+          deterministic tiebreak when a snapshot holds multiple model rows.
+        - Skip a value whose period already ended by the current reading's time
+          (`resets_at <= captured_at`): a reset fired during the outage, so the
+          old percentage and its now-past resets_at would be actively wrong.
+          "Previous value" only means something within the same period.
+        """
+        captured_dt = self._parse_dt(captured_at)
+        for quota_type in _FALLBACK_QUOTA_TYPES:
+            if quota_type in limits:
+                continue
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT q.quota_type, q.model, q.percent_remaining, q.resets_at,
+                       q.time_remaining_seconds, q.period_start_at, s.captured_at
+                FROM quotas q
+                JOIN snapshots s ON s.id = q.snapshot_id
+                WHERE q.quota_type = ?
+                  AND s.id < ?
+                  AND (q.model IS NULL OR q.model = 'sonnet')
+                ORDER BY s.captured_at DESC, q.id DESC
+                LIMIT 1
+            """, (quota_type, snapshot_id))
+            prev = cursor.fetchone()
+            if not prev:
+                continue
+            prev_resets = self._parse_dt(prev['resets_at'])
+            if (prev_resets is not None and captured_dt is not None
+                    and prev_resets <= captured_dt):
+                continue  # period already reset during the outage — don't mislead
+            quota = self._quota_row_to_dict(prev)
+            quota['stale'] = True
+            quota['stale_since'] = self._format_iso_z(prev['captured_at'])
+            limits[quota_type] = quota
 
     def _quota_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """Format a quotas row (from direct SELECT or JOIN) for dashboard output."""

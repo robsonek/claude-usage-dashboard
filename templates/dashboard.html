@@ -31,7 +31,7 @@
                     <span class="status-name"><span class="dot"></span>Weekly · 168h</span>
                     <span class="status-trend" id="weekly-trend"></span>
                 </div>
-                <div class="status-value"><span id="weekly-used">--</span><span class="u">% used</span></div>
+                <div class="status-value"><span id="weekly-used">--</span><span class="u">% used</span><span class="stale-badge" id="weekly-stale" hidden></span></div>
                 <div class="progress-container">
                     <div class="progress-bar" id="weekly-progress"></div>
                 </div>
@@ -46,7 +46,7 @@
                     <span class="status-name"><span class="dot"></span>Session · 5h</span>
                     <span class="status-trend" id="session-trend"></span>
                 </div>
-                <div class="status-value"><span id="session-used">--</span><span class="u">% used</span></div>
+                <div class="status-value"><span id="session-used">--</span><span class="u">% used</span><span class="stale-badge" id="session-stale" hidden></span></div>
                 <div class="progress-container">
                     <div class="progress-bar" id="session-progress"></div>
                 </div>
@@ -61,7 +61,7 @@
                     <span class="status-name"><span class="dot"></span><span id="model-title">Sonnet · 168h</span></span>
                     <span class="status-trend" id="model-trend"></span>
                 </div>
-                <div class="status-value"><span id="model-used">--</span><span class="u">% used</span></div>
+                <div class="status-value"><span id="model-used">--</span><span class="u">% used</span><span class="stale-badge" id="model-stale" hidden></span></div>
                 <div class="progress-container">
                     <div class="progress-bar" id="model-progress"></div>
                 </div>
@@ -338,7 +338,12 @@
             let cls = getProgressClass(s.used);
             if (s.willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
             const card = document.getElementById(s.cardId);
-            if (card) card.className = 'status-card ' + cls;
+            // Toggle ONLY the severity classes — never reassign className wholesale,
+            // or we'd wipe the is-stale marker that setStaleBadge owns on the card.
+            if (card) {
+                card.classList.remove('ok', 'warning', 'critical');
+                card.classList.add(cls);
+            }
             const bar = document.getElementById(s.barId);
             if (bar) bar.className = 'progress-bar ' + cls;
         }
@@ -346,14 +351,61 @@
         // Fill one status card. `used` drives the big number and bar length;
         // the card/bar color comes from applyStatusColor (usage + forecast).
         function setStatusCard(prefix, q) {
-            if (!q) return;
+            if (!q) {
+                // No data for this quota and nothing to carry forward: reset the
+                // card to blanks and clear any prior stale marker, rather than
+                // leaving a stale value frozen on screen across refreshes.
+                statusState[prefix].used = null;
+                document.getElementById(prefix + '-used').textContent = '--';
+                document.getElementById(prefix + '-remaining').textContent = '--';
+                document.getElementById(prefix + '-reset').textContent = 'reset --';
+                const card = document.getElementById(statusState[prefix].cardId);
+                if (card) card.classList.remove('ok', 'warning', 'critical');
+                const bar = document.getElementById(statusState[prefix].barId);
+                if (bar) { bar.className = 'progress-bar'; bar.style.width = '0%'; }
+                setStaleBadge(prefix, null);
+                return;
+            }
             const used = 100 - (q.percent_remaining || 0);
             statusState[prefix].used = used;
             document.getElementById(prefix + '-used').textContent = used.toFixed(1);
             document.getElementById(prefix + '-progress').style.width = used + '%';
             document.getElementById(prefix + '-remaining').textContent = (100 - used).toFixed(1) + '% left';
             document.getElementById(prefix + '-reset').textContent = 'reset ' + formatDate(q.resets_at);
+            setStaleBadge(prefix, q);
             applyStatusColor(prefix);
+        }
+
+        // Per-card "stale value" marker. When the latest snapshot was missing this
+        // quota (a glitched read), /api/current carries the previous reading
+        // forward tagged stale; flag the card so the big number reads as "last
+        // known", not current. `stale_since` is the source reading's timestamp.
+        function setStaleBadge(prefix, q) {
+            const card = document.getElementById(statusState[prefix].cardId);
+            const badge = document.getElementById(prefix + '-stale');
+            if (q && q.stale) {
+                if (card) card.classList.add('is-stale');
+                if (badge) {
+                    badge.textContent = '↩ prev' + (q.stale_since ? ' · ' + staleAge(q.stale_since) : '');
+                    badge.title = q.stale_since
+                        ? 'Read failed — showing last value from ' + new Date(q.stale_since).toLocaleString()
+                        : 'Read failed — showing last known value';
+                    badge.hidden = false;
+                }
+            } else {
+                if (card) card.classList.remove('is-stale');
+                if (badge) { badge.hidden = true; badge.textContent = ''; }
+            }
+        }
+
+        // Compact age (e.g. "8m", "2h", "3d") of a carried-forward value, so a
+        // multi-day-old fallback is visually obvious, not collapsed into hours.
+        function staleAge(iso) {
+            const ageMin = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+            if (ageMin < 1) return 'now';
+            if (ageMin < 60) return ageMin + 'm';
+            if (ageMin < 1440) return Math.floor(ageMin / 60) + 'h';
+            return Math.floor(ageMin / 1440) + 'd';
         }
 
         async function updateCurrentStatus() {
@@ -372,12 +424,15 @@
                 setStatusCard('weekly', limits.weekly);
                 setStatusCard('session', limits.session);
 
-                if (limits.model_specific) {
-                    const m = limits.model_specific.model;
+                // Always route the model card through setStatusCard (even when
+                // model_specific is absent) so a prior stale marker gets cleared
+                // instead of sticking; only refresh the title when we have a model.
+                const m = limits.model_specific && limits.model_specific.model;
+                if (m) {
                     document.getElementById('model-title').textContent =
-                        (m ? m.charAt(0).toUpperCase() + m.slice(1) : 'Model') + ' · 168h';
-                    setStatusCard('model', limits.model_specific);
+                        m.charAt(0).toUpperCase() + m.slice(1) + ' · 168h';
                 }
+                setStatusCard('model', limits.model_specific);
 
                 document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
                 updateFreshness(data.timestamp);

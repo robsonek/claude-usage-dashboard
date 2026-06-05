@@ -54,6 +54,34 @@ def test_chart_colors_swapped_to_palette():
     assert "Sonnet Usage (% used)" in html
 
 
+def test_status_cards_have_stale_value_markers():
+    html = _read("templates/dashboard.html")
+    for hook in ('id="weekly-stale"', 'id="session-stale"', 'id="model-stale"',
+                 'setStaleBadge', 'is-stale', 'staleAge'):
+        assert hook in html, f"missing {hook}"
+    css = _read("static/style.css")
+    assert ".stale-badge" in css
+    assert ".is-stale" in css
+
+
+def test_apply_status_color_preserves_is_stale():
+    """applyStatusColor must toggle only severity classes via classList, never
+    reassign className wholesale (which would wipe the is-stale marker)."""
+    html = _read("templates/dashboard.html")
+    assert "card.classList.remove('ok', 'warning', 'critical')" in html
+    assert "'status-card ' + cls" not in html, \
+        "wholesale className reset would drop the is-stale class"
+
+
+def test_model_card_routed_through_setStatusCard_for_clearing():
+    """The model card must always go through setStatusCard (so a prior stale
+    marker is cleared when model_specific disappears), and setStatusCard must
+    clear the badge when q is falsy."""
+    html = _read("templates/dashboard.html")
+    assert "setStatusCard('model', limits.model_specific)" in html
+    assert "setStaleBadge(prefix, null)" in html
+
+
 def test_login_has_no_theme_toggle():
     html = _read("templates/login.html")
     assert "theme-toggle" not in html
