@@ -364,7 +364,7 @@
                 if (data.error) {
                     console.error('Error fetching data:', data.error);
                     updateFreshness(null);
-                    return;
+                    return null;
                 }
 
                 const limits = data.limits || {};
@@ -381,9 +381,11 @@
 
                 document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
                 updateFreshness(data.timestamp);
+                return data.timestamp || null;
             } catch (error) {
                 console.error('Error:', error);
                 updateFreshness(null);
+                return null;
             }
         }
 
@@ -684,26 +686,46 @@
         }
 
 
+        // Event-driven refresh. New data lands only ~every 5 min (collector cron),
+        // so a lightweight heartbeat polls just the latest snapshot timestamp and
+        // the heavy refresh (charts + predictions) runs ONLY when it actually
+        // changed — no more blind wall-clock refreshes that lag or do needless work.
+        const POLL_INTERVAL_MS = 30 * 1000;
+        let lastSnapshotTs = null;
+
+        async function heartbeat() {
+            const ts = await updateCurrentStatus();   // cheap: status + freshness
+            if (ts && ts !== lastSnapshotTs) {         // a new snapshot appeared
+                lastSnapshotTs = ts;
+                await updateCharts();
+                await updatePredictions();
+            }
+        }
+
+        async function forceRefresh() {                // initial load / manual ↻
+            const ts = await updateCurrentStatus();
+            if (ts) lastSnapshotTs = ts;
+            await updateCharts();
+            await updatePredictions();
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             initCharts();
-            updateCurrentStatus();
-            updateCharts();
-            updatePredictions();
+            forceRefresh();
 
-            // Auto refresh every 5 minutes
-            setInterval(() => {
-                updateCurrentStatus();
-                updateCharts();
-                updatePredictions();
-            }, 5 * 60 * 1000);
+            // Event-driven auto refresh: the heartbeat detects a new snapshot
+            // within POLL_INTERVAL_MS and only then triggers the heavy refresh.
+            setInterval(heartbeat, POLL_INTERVAL_MS);
 
-            // Refresh button
-            document.getElementById('refresh-btn').addEventListener('click', () => {
-                updateCurrentStatus();
-                updateCharts();
-                updatePredictions();
+            // Re-check the moment the tab regains focus, so returning to a
+            // backgrounded tab shows fresh data without waiting for the next tick.
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) heartbeat();
             });
+
+            // Refresh button — force a full refresh regardless of the timestamp
+            document.getElementById('refresh-btn').addEventListener('click', forceRefresh);
 
             // Time range buttons
             document.querySelectorAll('.time-btn').forEach(btn => {

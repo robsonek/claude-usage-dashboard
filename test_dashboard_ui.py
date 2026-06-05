@@ -78,3 +78,21 @@ def test_session_chart_has_daily_peak_envelope():
     html = _read("templates/dashboard.html")
     assert "dailyPeakEnvelope" in html
     assert "Daily peak" in html
+
+
+def test_dashboard_uses_smart_polling_heartbeat():
+    """Refresh is event-driven: a lightweight heartbeat polls the latest
+    snapshot timestamp and only triggers the heavy refresh when it changed."""
+    html = _read("templates/dashboard.html")
+    assert "POLL_INTERVAL_MS" in html
+    assert "lastSnapshotTs" in html
+    assert "heartbeat" in html
+    # re-check on tab focus so coming back doesn't wait for the next tick
+    assert "visibilitychange" in html
+
+
+def test_dashboard_dropped_blind_5min_full_refresh():
+    """The old blind 'full refresh every 5 minutes' interval must be gone —
+    heavy refreshes are now gated on a new snapshot, not a wall clock."""
+    html = _read("templates/dashboard.html")
+    assert "5 * 60 * 1000" not in html
