@@ -76,10 +76,15 @@ def login_required(f):
     return decorated_function
 
 
-def load_history(hours=None):
+# Cap chart history at ~this many points. Long ranges (2m ≈ 17k snapshots / 9 MB
+# JSON) are downsampled to keep the payload/render fast; prediction is NOT capped.
+HISTORY_CHART_MAX_POINTS = 2000
+
+
+def load_history(hours=None, max_points=None):
     """Load history from SQLite database."""
     db = get_db()
-    return db.get_history(hours=hours)
+    return db.get_history(hours=hours, max_points=max_points)
 
 
 def get_current_usage():
@@ -336,7 +341,7 @@ def api_history():
     hours = request.args.get('hours', type=int)
     if hours is not None:
         hours = max(1, min(hours, 24 * 90))  # clamp to [1h, 90d]
-    history = load_history(hours=hours)
+    history = load_history(hours=hours, max_points=HISTORY_CHART_MAX_POINTS)
     return jsonify(history)
 
 

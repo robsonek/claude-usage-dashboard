@@ -309,12 +309,20 @@ class UsageDatabase:
         self._fill_missing_quotas(result['limits'], row['id'], row['captured_at'])
         return result
 
-    def get_history(self, hours: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_history(self, hours: Optional[int] = None,
+                    max_points: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get historical usage data.
 
         Args:
             hours: Number of hours to look back. Default is 168 (7 days).
+            max_points: If set and the range holds more snapshots than this, return
+                an evenly-spaced subset capped at ~max_points (first and last point
+                always kept). Charts plot on a time axis, so a strided sample looks
+                identical at that zoom while cutting build/payload/render by ~10x for
+                long ranges (60d ≈ 17k snapshots / 9 MB JSON otherwise). None (default)
+                returns EVERY snapshot — callers needing full resolution (prediction)
+                must leave it None.
 
         Returns:
             List of usage records in dashboard format
@@ -325,15 +333,41 @@ class UsageDatabase:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         cursor = self.conn.cursor()
-        cursor.execute("""
+
+        # Default: filter the JOIN by captured_at (covering index) — unchanged path.
+        where, params = "s.captured_at >= ?", (cutoff,)
+        if max_points and max_points >= 2:
+            # Cheap id-only scan (covering index) tells us the count up front so we
+            # can cap the expensive quota JOIN + dict build for long ranges.
+            cursor.execute(
+                "SELECT id FROM snapshots WHERE captured_at >= ? "
+                "ORDER BY captured_at ASC, id ASC", (cutoff,))
+            ids = [row['id'] for row in cursor.fetchall()]
+            if len(ids) > max_points:
+                # Pick max_points indices evenly across [0, n-1], inclusive of both
+                # ends; dedup consecutive when n is only just over the cap.
+                n = len(ids)
+                picked: List[int] = []
+                prev = -1
+                for k in range(max_points):
+                    idx = (k * (n - 1)) // (max_points - 1)
+                    if idx != prev:
+                        picked.append(ids[idx])
+                        prev = idx
+                # ids are our own integer PKs — inline them so we never hit the bound
+                # -parameter ceiling on very large ranges.
+                id_list = ','.join(str(int(i)) for i in picked)
+                where, params = f"s.id IN ({id_list})", ()
+
+        cursor.execute(f"""
             SELECT s.id, s.captured_at, s.account_type, s.email,
                    q.quota_type, q.model, q.percent_remaining,
                    q.resets_at, q.time_remaining_seconds, q.period_start_at
             FROM snapshots s
             LEFT JOIN quotas q ON q.snapshot_id = s.id
-            WHERE s.captured_at >= ?
+            WHERE {where}
             ORDER BY s.captured_at ASC, q.id ASC
-        """, (cutoff,))
+        """, params)
 
         by_id: Dict[int, Dict[str, Any]] = {}
         order: List[int] = []
