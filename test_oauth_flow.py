@@ -89,3 +89,10 @@ def test_fetch_profile_pro_and_unknown(monkeypatch):
     monkeypatch.setattr(of, '_urlopen', lambda req, timeout=None: FakeResponse(
         {'account': {'email': 'u@x.com', 'has_claude_max': False, 'has_claude_pro': False}}))
     assert of.fetch_profile('AT')['account_type'] == 'unknown'
+
+
+def test_exchange_code_missing_tokens_raises(monkeypatch):
+    monkeypatch.setattr(of, '_urlopen',
+                        lambda req, timeout=None: FakeResponse({'access_token': 'AT'}))  # no refresh_token
+    with pytest.raises(of.OAuthError):
+        of.exchange_code('C#S', 'V', now_ms=0)

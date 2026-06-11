@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Konta · Claude Usage</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Konta <span class="version-badge">v{{ version }}</span></h1>
+        <a href="{{ url_for('dashboard') }}" class="btn-refresh">← Dashboard</a>
+    </header>
+
+    <section class="accounts-list" id="accounts-list">
+        {% for a in accounts %}
+        <div class="account-row" data-id="{{ a.id }}">
+            <span class="acc-dot {{ 'on' if a.is_active else 'off' }}"></span>
+            <span class="acc-label">{{ a.label }}</span>
+            <span class="acc-email">{{ a.email or '—' }}</span>
+            <span class="acc-type">{{ a.account_type or '?' }}</span>
+            <span class="acc-error">{{ a.last_error or '' }}</span>
+            <span class="acc-actions">
+                {% if a.is_active %}
+                <button onclick="op({{ a.id }}, 'disable')">Wyłącz</button>
+                {% else %}
+                <button onclick="op({{ a.id }}, 'enable')">Włącz</button>
+                {% endif %}
+                <button onclick="renameAcc({{ a.id }})">Zmień nazwę</button>
+                <button onclick="delAcc({{ a.id }})">Usuń</button>
+            </span>
+        </div>
+        {% else %}
+        <p class="muted">Brak kont. Dodaj pierwsze konto poniżej.</p>
+        {% endfor %}
+    </section>
+
+    <section class="add-account">
+        <h2>Dodaj konto</h2>
+        <button id="start-btn" onclick="startOAuth()">1. Rozpocznij autoryzację</button>
+        <div id="oauth-step2" hidden>
+            <p>Otwórz link, zaloguj się na wybrane konto Claude i wklej kod:</p>
+            <p><a id="auth-link" href="#" target="_blank" rel="noopener">Otwórz stronę autoryzacji ↗</a></p>
+            <input id="code-input" type="text" placeholder="wklej kod#state" size="60">
+            <input id="label-input" type="text" placeholder="nazwa (opcjonalnie)">
+            <button onclick="completeOAuth()">2. Dodaj konto</button>
+        </div>
+        <p id="add-msg" class="muted"></p>
+    </section>
+</div>
+<script>
+async function startOAuth() {
+    const r = await fetch('/accounts/add', {method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'action=start'});
+    const d = await r.json();
+    document.getElementById('auth-link').href = d.authorize_url;
+    document.getElementById('oauth-step2').hidden = false;
+}
+async function completeOAuth() {
+    const code = document.getElementById('code-input').value;
+    const label = document.getElementById('label-input').value;
+    const body = new URLSearchParams({action:'complete', code, label});
+    const r = await fetch('/accounts/add', {method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
+    const d = await r.json();
+    const msg = document.getElementById('add-msg');
+    if (r.ok) { msg.textContent = `Dodano ${d.email} (${d.account_type}), podpięto ${d.backfilled} starych snapshotów.`;
+        setTimeout(()=>location.reload(), 1200); }
+    else { msg.textContent = 'Błąd: ' + (d.error || r.status); }
+}
+async function op(id, name) {
+    await fetch(`/accounts/${id}/${name}`, {method:'POST'});
+    location.reload();
+}
+async function delAcc(id) {
+    if (!confirm('Usunąć konto? Historia snapshotów zostanie zachowana.')) return;
+    await fetch(`/accounts/${id}/delete`, {method:'POST'});
+    location.reload();
+}
+async function renameAcc(id) {
+    const label = prompt('Nowa nazwa konta:');
+    if (!label) return;
+    await fetch(`/accounts/${id}/rename`, {method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:new URLSearchParams({label})});
+    location.reload();
+}
+</script>
+</body>
+</html>

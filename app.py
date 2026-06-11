@@ -10,6 +10,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, s
 from werkzeug.security import check_password_hash
 
 import config
+import oauth_flow
 from database import UsageDatabase
 
 app = Flask(__name__)
@@ -287,6 +288,14 @@ def calculate_prediction(history, limit_type='weekly'):
     }
 
 
+def _resolve_account_id():
+    """account query param, or the default (first active) account, or None (legacy)."""
+    acc = request.args.get('account', type=int)
+    if acc is not None:
+        return acc
+    return get_db().get_default_account_id()
+
+
 # ============ ROUTES ============
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -324,11 +333,100 @@ def dashboard():
     return render_template('dashboard.html', version=config.VERSION)
 
 
+@app.route('/accounts')
+@login_required
+def accounts_page():
+    """Account management UI."""
+    return render_template('accounts.html', version=config.VERSION,
+                           accounts=get_db().list_accounts())
+
+
+@app.route('/api/accounts')
+@login_required
+def api_accounts():
+    """Account list + each account's latest snapshot summary (for the bar)."""
+    db = get_db()
+    out = []
+    for acc in db.list_accounts():
+        current = db.get_current(account_id=acc['id']) if acc['is_active'] else None
+        weekly = session_pct = None
+        if current:
+            weekly = (current['limits'].get('weekly') or {}).get('percent_remaining')
+            session_pct = (current['limits'].get('session') or {}).get('percent_remaining')
+        out.append({**acc, 'weekly_remaining': weekly, 'session_remaining': session_pct})
+    return jsonify(out)
+
+
+@app.route('/accounts/add', methods=['POST'])
+@login_required
+def accounts_add():
+    """Step 1 (action=start): return authorize URL, stash PKCE+state in session.
+       Step 2 (action=complete): validate state, exchange code, fetch profile, save."""
+    action = request.form.get('action')
+    if action == 'start':
+        pkce = oauth_flow.generate_pkce()
+        state = oauth_flow.generate_state()
+        session['oauth_verifier'] = pkce['verifier']
+        session['oauth_state'] = state
+        return jsonify({'authorize_url': oauth_flow.build_authorize_url(
+            pkce['challenge'], state)})
+    if action == 'complete':
+        verifier = session.get('oauth_verifier')
+        expected_state = session.get('oauth_state')
+        if not verifier:
+            return jsonify({'error': 'Brak rozpoczętej sesji OAuth — kliknij „Dodaj konto" ponownie.'}), 400
+        code = request.form.get('code', '').strip()
+        if not code:
+            return jsonify({'error': 'Wklej kod autoryzacyjny.'}), 400
+        # If the pasted code carries a state (code#state), it must match what we issued.
+        if '#' in code and expected_state and code.split('#', 1)[1] != expected_state:
+            return jsonify({'error': 'Niezgodny state — rozpocznij autoryzację ponownie.'}), 400
+        try:
+            tokens = oauth_flow.exchange_code(code, verifier)
+            profile = oauth_flow.fetch_profile(tokens['access_token'])
+        except oauth_flow.OAuthError as e:
+            return jsonify({'error': str(e)}), 400
+        db = get_db()
+        label = request.form.get('label') or profile['email'] or 'Konto'
+        acc_id = db.add_or_update_account(
+            label=label, email=profile['email'], account_type=profile['account_type'],
+            access_token=tokens['access_token'], refresh_token=tokens['refresh_token'],
+            expires_at=tokens['expires_at'])
+        backfilled = db.backfill_account_by_email(acc_id, profile['email']) \
+            if profile['email'] else 0
+        session.pop('oauth_verifier', None)
+        session.pop('oauth_state', None)
+        return jsonify({'id': acc_id, 'email': profile['email'],
+                        'account_type': profile['account_type'], 'backfilled': backfilled})
+    return jsonify({'error': 'unknown action'}), 400
+
+
+@app.route('/accounts/<int:account_id>/<string:op>', methods=['POST'])
+@login_required
+def accounts_op(account_id, op):
+    """enable / disable / delete / rename an account."""
+    db = get_db()
+    if op == 'enable':
+        db.set_account_active(account_id, True)
+    elif op == 'disable':
+        db.set_account_active(account_id, False)
+    elif op == 'delete':
+        db.delete_account(account_id)
+    elif op == 'rename':
+        label = request.form.get('label', '').strip()
+        if not label:
+            return jsonify({'error': 'Pusta nazwa.'}), 400
+        db.rename_account(account_id, label)
+    else:
+        return jsonify({'error': 'unknown op'}), 400
+    return jsonify({'ok': True})
+
+
 @app.route('/api/current')
 @login_required
 def api_current():
     """Returns current usage data"""
-    data = get_current_usage()
+    data = get_db().get_current(account_id=_resolve_account_id())
     if data:
         return jsonify(data)
     return jsonify({'error': 'Unable to fetch data'}), 500
@@ -341,7 +439,8 @@ def api_history():
     hours = request.args.get('hours', type=int)
     if hours is not None:
         hours = max(1, min(hours, 24 * 90))  # clamp to [1h, 90d]
-    history = load_history(hours=hours, max_points=HISTORY_CHART_MAX_POINTS)
+    history = get_db().get_history(hours=hours, max_points=HISTORY_CHART_MAX_POINTS,
+                                   account_id=_resolve_account_id())
     return jsonify(history)
 
 
@@ -349,7 +448,7 @@ def api_history():
 @login_required
 def api_prediction():
     """Returns predictions for all limits"""
-    history = load_history()
+    history = get_db().get_history(account_id=_resolve_account_id())
 
     predictions = {
         'weekly': calculate_prediction(history, 'weekly'),
