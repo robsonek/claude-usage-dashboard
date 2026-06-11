@@ -93,6 +93,20 @@ class UsageDatabase:
                 FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                email TEXT,
+                account_type TEXT,
+                access_token TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME,
+                last_polled_at DATETIME,
+                last_error TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_snapshots_captured_at ON snapshots(captured_at);
             CREATE INDEX IF NOT EXISTS idx_quotas_snapshot_id ON quotas(snapshot_id);
         """)
@@ -101,6 +115,13 @@ class UsageDatabase:
         cols = {row['name'] for row in cursor.fetchall()}
         if 'period_start_at' not in cols:
             cursor.execute("ALTER TABLE quotas ADD COLUMN period_start_at DATETIME")
+        # account_id on snapshots (nullable; legacy rows keep NULL until backfilled)
+        cursor.execute("PRAGMA table_info(snapshots)")
+        snap_cols = {row['name'] for row in cursor.fetchall()}
+        if 'account_id' not in snap_cols:
+            cursor.execute("ALTER TABLE snapshots ADD COLUMN account_id INTEGER")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_account_id ON snapshots(account_id)")
         self.conn.commit()
 
     def insert_snapshot(self, data: Dict[str, Any]) -> int:
