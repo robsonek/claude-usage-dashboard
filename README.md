@@ -3,7 +3,8 @@
 [![tests](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/tests.yml/badge.svg)](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/tests.yml)
 [![secret-scan](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/robsonek/claude-usage-dashboard/actions/workflows/secret-scan.yml)
 
-Web dashboard for monitoring Claude Code CLI usage with charts and prediction.
+Web dashboard for monitoring Claude subscription usage (5h / 7d / per-model limits)
+across multiple accounts, with charts and prediction.
 
 ![Dashboard Screenshot](screenshot-dark.png)
 
@@ -21,7 +22,8 @@ distribution with Python 3.11+ works.
 - SSH access to the server
 - Python 3.11+ with `venv`
 - Git
-- Claude Code CLI (`curl -fsSL https://claude.ai/install.sh | bash`) - after installation run `claude` to authenticate
+- A Claude subscription (Pro / Max / Team / Enterprise). Accounts are added later
+  through the dashboard's OAuth flow — **no Claude CLI is needed on the server.**
 
 ## Deployment Steps
 
@@ -137,9 +139,11 @@ crontab -e
 Add the following lines at the end:
 
 ```cron
-PATH=/home/YOUR_USERNAME/.local/bin:/usr/local/bin:/usr/bin:/bin
 */5 * * * * cd /home/YOUR_USERNAME/claude-dashboard && ./collect_history.sh >> /home/YOUR_USERNAME/claude-dashboard/cron.log 2>&1
 ```
+
+`collect_history.sh` loads `TOKEN_ENCRYPTION_KEY` from `.env` itself (cron does not
+inherit systemd's `EnvironmentFile`), so no extra `PATH`/env setup is needed here.
 
 Verify cron is set:
 
@@ -251,21 +255,31 @@ sudo systemctl restart claude-dashboard
 sudo systemctl stop claude-dashboard
 ```
 
-## Claude CLI Authentication
+## Adding Claude Accounts
 
-IMPORTANT: The data collection requires Claude CLI to be logged in on the server.
+Accounts are added entirely through the dashboard — there is **no Claude CLI on
+the server** and nothing to log into over SSH. Tokens are stored encrypted in the
+database (Fernet), so `TOKEN_ENCRYPTION_KEY` must be set in `.env` first (see
+[Configuration](#configuration)).
 
-After deployment, SSH into the server and authenticate:
+1. Open the dashboard, log in, and go to the **Konta** page.
+2. Click **Rozpocznij autoryzację**. Open the generated authorize link (or use
+   **Kopiuj URL** to open it on another device / in a browser already signed into
+   the right Claude account) and approve access.
+3. Claude shows a `code#state` string — paste it back on the **Konta** page and
+   click **Dodaj konto**.
 
-```bash
-ssh user@server
-claude
-```
+The account is then polled every 5 minutes. Add as many accounts as you like; the
+account bar on the dashboard switches between them. Each row has an **Odśwież
+sesję** button that re-runs this flow to repair an account whose token was revoked
+(it matches by e-mail, so history is kept). Multi-account support requires v1.3.0+.
 
-Follow the OAuth flow to authenticate with your Anthropic account.
-The CLI stores credentials in `~/.claude/` directory.
+> The OAuth token endpoint is fronted by Cloudflare and is sensitive to the
+> `User-Agent`; the app already sends the value that works. If a code exchange
+> returns 403/429, wait a few minutes and retry — repeated failed attempts extend
+> a per-IP cooldown.
 
-Without authentication, the dashboard will show empty quota data.
+Until at least one active account is added, the dashboard shows no usage data.
 
 ## Security Recommendations
 
