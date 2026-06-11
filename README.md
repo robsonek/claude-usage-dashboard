@@ -197,7 +197,7 @@ Generate the token-encryption key with:
 python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
 
-Add Claude accounts from the **Konta** page in the dashboard (OAuth, paste-the-code
+Add Claude accounts from the **Accounts** page in the dashboard (OAuth, paste-the-code
 flow). Each account is polled every 5 minutes; the account bar lets you switch between
 them. Losing `TOKEN_ENCRYPTION_KEY` means re-adding every account.
 
@@ -265,16 +265,16 @@ the server** and nothing to log into over SSH. Tokens are stored encrypted in th
 database (Fernet), so `TOKEN_ENCRYPTION_KEY` must be set in `.env` first (see
 [Configuration](#configuration)).
 
-1. Open the dashboard, log in, and go to the **Konta** page.
-2. Click **Rozpocznij autoryzację**. Open the generated authorize link (or use
-   **Kopiuj URL** to open it on another device / in a browser already signed into
+1. Open the dashboard, log in, and go to the **Accounts** page.
+2. Click **Start authorization**. Open the generated authorize link (or use
+   **Copy URL** to open it on another device / in a browser already signed into
    the right Claude account) and approve access.
-3. Claude shows a `code#state` string — paste it back on the **Konta** page and
-   click **Dodaj konto**.
+3. Claude shows a `code#state` string — paste it back on the **Accounts** page and
+   click **Add account**.
 
 The account is then polled every 5 minutes. Add as many accounts as you like; the
-account bar on the dashboard switches between them. Each row has an **Odśwież
-sesję** button that re-runs this flow to repair an account whose token was revoked
+account bar on the dashboard switches between them. Each row has a **Refresh
+session** button that re-runs this flow to repair an account whose token was revoked
 (it matches by e-mail, so history is kept). Multi-account support requires v1.3.0+.
 
 > The OAuth token endpoint is fronted by Cloudflare and is sensitive to the
@@ -307,10 +307,10 @@ Until at least one active account is added, the dashboard shows no usage data.
 - Check disk space: `df -h`
 
 ### Dashboard shows empty quotas
-Data comes from accounts added on the **Konta** page (multi-account OAuth) —
+Data comes from accounts added on the **Accounts** page (multi-account OAuth) —
 the collector polls every *active* account. Typical causes and how to diagnose:
 
-1. No active account — open the **Konta** page and check that at least one
+1. No active account — open the **Accounts** page and check that at least one
    account is added and active (re-authorize it there if its tokens were
    revoked).
 2. Collector missing `TOKEN_ENCRYPTION_KEY` — cron does not load systemd's
@@ -332,7 +332,7 @@ the collector polls every *active* account. Typical causes and how to diagnose:
    ```
 
    `WARN: at least one account failed` means a per-account error (details in
-   the lines above it and in the account's `last_error` on the Konta page);
+   the lines above it and in the account's `last_error` on the Accounts page);
    `no active accounts to poll` means case 1.
 
 ### `cron.log` grows indefinitely

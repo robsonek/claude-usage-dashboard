@@ -278,13 +278,13 @@ def calculate_prediction(history, limit_type='weekly'):
 
     # Check data time span (need at least 5 min for prediction)
     time_span_hours = float(times[-1] - times[0]) / 3600
-    low_confidence = bool(time_span_hours < 0.083)  # ~5 minut
+    low_confidence = bool(time_span_hours < 0.083)  # ~5 minutes
 
     # Trend per hour
     trend_per_hour = a * 3600
 
     # If time_to_reset <= 0, data is stale (reset happened)
-    stale_data = bool(time_to_reset <= 0)  # Tylko gdy reset minął
+    stale_data = bool(time_to_reset <= 0)  # Only when the reset has passed
     if stale_data:
         low_confidence = True
 
@@ -404,7 +404,7 @@ def accounts_add():
         # Fail before the user authorizes: without the key we couldn't store the
         # tokens, and the one-time OAuth code would already be burned by then.
         if not config.TOKEN_ENCRYPTION_KEY:
-            return jsonify({'error': 'TOKEN_ENCRYPTION_KEY nie jest ustawiony — nie można bezpiecznie zapisać tokenów.'}), 400
+            return jsonify({'error': 'TOKEN_ENCRYPTION_KEY is not set — tokens cannot be stored securely.'}), 400
         pkce = oauth_flow.generate_pkce()
         state = oauth_flow.generate_state()
         session['oauth_verifier'] = pkce['verifier']
@@ -415,17 +415,17 @@ def accounts_add():
         verifier = session.get('oauth_verifier')
         expected_state = session.get('oauth_state')
         if not verifier or not expected_state:
-            return jsonify({'error': 'Brak rozpoczętej sesji OAuth — kliknij „Dodaj konto" ponownie.'}), 400
+            return jsonify({'error': 'No OAuth session in progress — click "Add account" again.'}), 400
         code = request.form.get('code', '').strip()
         if not code:
-            return jsonify({'error': 'Wklej kod autoryzacyjny.'}), 400
+            return jsonify({'error': 'Paste the authorization code.'}), 400
         # The pasted value must be code#state and the state MUST match what we
         # issued — always, not only when a '#' happens to be present. A bare code
         # (no state) is rejected so a code from a different/forged authorization
         # can't be completed against this session.
         got_state = code.split('#', 1)[1] if '#' in code else ''
         if got_state != expected_state:
-            return jsonify({'error': 'Niezgodny lub brakujący state — rozpocznij autoryzację ponownie.'}), 400
+            return jsonify({'error': 'Mismatched or missing state — start the authorization again.'}), 400
         try:
             tokens = oauth_flow.exchange_code(code, verifier)
             profile = oauth_flow.fetch_profile(tokens['access_token'])
@@ -435,9 +435,9 @@ def accounts_add():
         # a fresh duplicate account every time (and the account couldn't be
         # backfilled). Refuse rather than silently proliferate rows.
         if not profile.get('email'):
-            return jsonify({'error': 'Nie udało się odczytać adresu e-mail konta — spróbuj autoryzować ponownie.'}), 400
+            return jsonify({'error': "Could not read the account's e-mail address — try authorizing again."}), 400
         db = get_db()
-        label = request.form.get('label') or profile['email'] or 'Konto'
+        label = request.form.get('label') or profile['email'] or 'Account'
         acc_id = db.add_or_update_account(
             label=label, email=profile['email'], account_type=profile['account_type'],
             access_token=tokens['access_token'], refresh_token=tokens['refresh_token'],
@@ -465,7 +465,7 @@ def accounts_op(account_id, op):
     elif op == 'rename':
         label = request.form.get('label', '').strip()
         if not label:
-            return jsonify({'error': 'Pusta nazwa.'}), 400
+            return jsonify({'error': 'Empty label.'}), 400
         db.rename_account(account_id, label)
     else:
         return jsonify({'error': 'unknown op'}), 400

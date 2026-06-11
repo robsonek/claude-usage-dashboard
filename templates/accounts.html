@@ -1,21 +1,21 @@
 <!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Konta · Claude Usage</title>
+    <title>Accounts · Claude Usage</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <div class="dashboard accounts-page">
     <header>
-        <h1>Konta <span class="version-badge" title="App version">v{{ version }}</span></h1>
+        <h1>Accounts <span class="version-badge" title="App version">v{{ version }}</span></h1>
         <div class="header-actions">
             <a href="{{ url_for('dashboard') }}" class="btn-refresh">← Dashboard</a>
         </div>
     </header>
 
-    <p class="section-label">Połączone konta</p>
+    <p class="section-label">Connected accounts</p>
     <section class="accounts-panel" id="accounts-list">
         {% for a in accounts %}
         <div class="account-row" data-id="{{ a.id }}">
@@ -25,44 +25,44 @@
                 <span class="acc-email">{{ a.email or '—' }}</span>
             </div>
             <span class="acc-type">{{ a.account_type or '?' }}</span>
-            {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ błąd odczytu</span>{% endif %}
+            {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ read error</span>{% endif %}
             <span class="acc-actions">
-                <button class="reauth" data-email="{{ a.email }}">Odśwież sesję</button>
+                <button class="reauth" data-email="{{ a.email }}">Refresh session</button>
                 {% if a.is_active %}
-                <button onclick="op({{ a.id }}, 'disable')">Wyłącz</button>
+                <button onclick="op({{ a.id }}, 'disable')">Disable</button>
                 {% else %}
-                <button onclick="op({{ a.id }}, 'enable')">Włącz</button>
+                <button onclick="op({{ a.id }}, 'enable')">Enable</button>
                 {% endif %}
-                <button onclick="renameAcc({{ a.id }})">Zmień nazwę</button>
-                <button class="danger" onclick="delAcc({{ a.id }})">Usuń</button>
+                <button onclick="renameAcc({{ a.id }})">Rename</button>
+                <button class="danger" onclick="delAcc({{ a.id }})">Delete</button>
             </span>
         </div>
         {% else %}
-        <p class="acc-empty">Brak kont — dodaj pierwsze konto poniżej.</p>
+        <p class="acc-empty">No accounts — add your first account below.</p>
         {% endfor %}
     </section>
 
-    <p class="section-label">Dodaj konto</p>
+    <p class="section-label">Add account</p>
     <section class="accounts-panel add-account">
         <div class="add-step">
             <span class="step-no">1</span>
             <div class="step-body">
-                <p>Wygeneruj link autoryzacji i zaloguj się na wybrane konto Claude.</p>
-                <button id="start-btn" class="btn-accent" onclick="startOAuth()">Rozpocznij autoryzację</button>
+                <p>Generate an authorization link and sign in to the Claude account of your choice.</p>
+                <button id="start-btn" class="btn-accent" onclick="startOAuth()">Start authorization</button>
                 <div class="auth-actions" id="auth-actions" hidden>
-                    <a id="auth-link" class="auth-link" href="#" target="_blank" rel="noopener">Otwórz stronę autoryzacji ↗</a>
-                    <button type="button" class="btn-ghost" onclick="copyAuthUrl()">Kopiuj URL</button>
+                    <a id="auth-link" class="auth-link" href="#" target="_blank" rel="noopener">Open authorization page ↗</a>
+                    <button type="button" class="btn-ghost" onclick="copyAuthUrl()">Copy URL</button>
                 </div>
             </div>
         </div>
         <div class="add-step" id="oauth-step2" hidden>
             <span class="step-no">2</span>
             <div class="step-body">
-                <p>Skopiuj wyświetlony kod i wklej go tutaj:</p>
+                <p>Copy the code shown there and paste it here:</p>
                 <div class="add-form">
-                    <input id="code-input" type="text" placeholder="wklej kod#state" autocomplete="off">
-                    <input id="label-input" type="text" placeholder="nazwa (opcjonalnie)">
-                    <button class="btn-accent" onclick="completeOAuth()">Dodaj konto</button>
+                    <input id="code-input" type="text" placeholder="paste code#state" autocomplete="off">
+                    <input id="label-input" type="text" placeholder="label (optional)">
+                    <button class="btn-accent" onclick="completeOAuth()">Add account</button>
                 </div>
             </div>
         </div>
@@ -77,7 +77,7 @@ async function startOAuth(hint) {
         body:'action=start'});
     const d = await r.json();
     const msg = document.getElementById('add-msg');
-    if (!r.ok) { msg.textContent = 'Błąd: ' + (d.error || r.status); return; }
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.error || r.status); return; }
     msg.textContent = hint || '';
     authUrl = d.authorize_url;
     document.getElementById('auth-link').href = authUrl;
@@ -89,13 +89,13 @@ async function copyAuthUrl() {
     const msg = document.getElementById('add-msg');
     try {
         await navigator.clipboard.writeText(authUrl);
-        msg.textContent = 'Skopiowano URL autoryzacji do schowka.';
+        msg.textContent = 'Authorization URL copied to clipboard.';
     } catch (e) {
         // clipboard API needs HTTPS/permission; fall back to selecting a temp field
         const ta = document.createElement('textarea');
         ta.value = authUrl; document.body.appendChild(ta); ta.select();
-        try { document.execCommand('copy'); msg.textContent = 'Skopiowano URL autoryzacji do schowka.'; }
-        catch (_) { msg.textContent = 'Nie udało się skopiować — użyj linku „Otwórz stronę autoryzacji".'; }
+        try { document.execCommand('copy'); msg.textContent = 'Authorization URL copied to clipboard.'; }
+        catch (_) { msg.textContent = 'Copy failed — use the "Open authorization page" link.'; }
         ta.remove();
     }
 }
@@ -103,7 +103,7 @@ async function copyAuthUrl() {
 // email, so logging into the matching Claude account repairs its tokens in place.
 async function reauth(email) {
     const hint = email
-        ? `Odświeżanie sesji konta ${email} — zaloguj się DOKŁADNIE na to konto i wklej kod.`
+        ? `Refreshing the session of ${email} — sign in to EXACTLY this account and paste the code.`
         : '';
     await startOAuth(hint);
     document.querySelector('.add-account').scrollIntoView({behavior: 'smooth'});
@@ -116,21 +116,21 @@ async function completeOAuth() {
         headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
     const d = await r.json();
     const msg = document.getElementById('add-msg');
-    if (r.ok) { msg.textContent = `Dodano ${d.email} (${d.account_type}), podpięto ${d.backfilled} starych snapshotów.`;
+    if (r.ok) { msg.textContent = `Added ${d.email} (${d.account_type}), attached ${d.backfilled} legacy snapshots.`;
         setTimeout(()=>location.reload(), 1200); }
-    else { msg.textContent = 'Błąd: ' + (d.error || r.status); }
+    else { msg.textContent = 'Error: ' + (d.error || r.status); }
 }
 async function op(id, name) {
     await fetch(`/accounts/${id}/${name}`, {method:'POST'});
     location.reload();
 }
 async function delAcc(id) {
-    if (!confirm('Usunąć konto? Historia snapshotów zostanie zachowana.')) return;
+    if (!confirm('Delete this account? Its snapshot history will be kept.')) return;
     await fetch(`/accounts/${id}/delete`, {method:'POST'});
     location.reload();
 }
 async function renameAcc(id) {
-    const label = prompt('Nowa nazwa konta:');
+    const label = prompt('New account label:');
     if (!label) return;
     await fetch(`/accounts/${id}/rename`, {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
