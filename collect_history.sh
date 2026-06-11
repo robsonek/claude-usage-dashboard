@@ -7,9 +7,13 @@ DATA_DIR="$SCRIPT_DIR/data"
 VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
 
 # Cron doesn't load systemd's EnvironmentFile, so pull the one secret the
-# collector needs (token decryption key) straight from .env.
+# collector needs (token decryption key) straight from .env. Strip one layer of
+# surrounding quotes — systemd's EnvironmentFile would, so a value written as
+# KEY="..." must decode the same here or Fernet gets a key with literal quotes.
 if [ -f "$SCRIPT_DIR/.env" ]; then
-    export TOKEN_ENCRYPTION_KEY="$(grep -E '^TOKEN_ENCRYPTION_KEY=' "$SCRIPT_DIR/.env" | tail -1 | cut -d= -f2-)"
+    _KEY="$(grep -E '^TOKEN_ENCRYPTION_KEY=' "$SCRIPT_DIR/.env" | tail -1 | cut -d= -f2-)"
+    _KEY="${_KEY%\"}"; _KEY="${_KEY#\"}"; _KEY="${_KEY%\'}"; _KEY="${_KEY#\'}"
+    export TOKEN_ENCRYPTION_KEY="$_KEY"
 fi
 
 log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2; }

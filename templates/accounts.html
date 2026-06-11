@@ -27,7 +27,7 @@
             <span class="acc-type">{{ a.account_type or '?' }}</span>
             {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ błąd odczytu</span>{% endif %}
             <span class="acc-actions">
-                <button class="reauth" onclick="reauth('{{ a.email|e }}')">Odśwież sesję</button>
+                <button class="reauth" data-email="{{ a.email }}">Odśwież sesję</button>
                 {% if a.is_active %}
                 <button onclick="op({{ a.id }}, 'disable')">Wyłącz</button>
                 {% else %}
@@ -137,6 +137,11 @@ async function renameAcc(id) {
         body:new URLSearchParams({label})});
     location.reload();
 }
+// Wire re-auth buttons via data-email (read with dataset, never inlined into a
+// JS string) so an email can't break out of an inline handler and execute.
+document.querySelectorAll('.reauth').forEach(btn => {
+    btn.addEventListener('click', () => reauth(btn.dataset.email));
+});
 </script>
 </body>
 </html>

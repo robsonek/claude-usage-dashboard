@@ -129,6 +129,22 @@ def test_get_default_account_id_first_active(db):
     assert db.get_default_account_id() == b
 
 
+def test_get_default_account_id_falls_back_when_all_disabled(db):
+    """Audit point 9a: with accounts present but ALL disabled, scope to a real
+    account (lowest id) rather than returning None — None makes get_current /
+    get_history merge every account's snapshots into one garbage series."""
+    a = _add(db, email='a@x.com')
+    b = _add(db, email='b@x.com')
+    db.set_account_active(a, False)
+    db.set_account_active(b, False)
+    assert db.get_default_account_id() == a
+
+
+def test_get_default_account_id_none_when_no_accounts(db):
+    """Truly empty (legacy single-account era) still returns None → unscoped."""
+    assert db.get_default_account_id() is None
+
+
 def SNAP(acc_id, pct, captured=None, resets=None):
     """Build a weekly-quota snapshot. captured_at defaults to now (so the 168h
     get_history cutoff always covers it — no time-bomb), resets_at a few days

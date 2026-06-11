@@ -84,9 +84,30 @@ def login_required(f):
     return decorated_function
 
 
+@app.after_request
+def _security_headers(resp):
+    """Baseline hardening headers on every response. No strict CSP yet — the
+    dashboard relies on inline <script>, so a real policy needs nonces (deferred,
+    see audit point 5). X-Frame-Options already blocks clickjacking."""
+    resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    resp.headers.setdefault('X-Frame-Options', 'DENY')
+    resp.headers.setdefault('Referrer-Policy', 'no-referrer')
+    # TLS is terminated at Cloudflare, which sets X-Forwarded-Proto; only emit
+    # HSTS over real HTTPS so it can't pin localhost during plain-HTTP dev.
+    if request.headers.get('X-Forwarded-Proto') == 'https' or request.is_secure:
+        resp.headers.setdefault('Strict-Transport-Security',
+                                'max-age=31536000; includeSubDomains')
+    return resp
+
+
 # Cap chart history at ~this many points. Long ranges (2m ≈ 17k snapshots / 9 MB
 # JSON) are downsampled to keep the payload/render fast; prediction is NOT capped.
 HISTORY_CHART_MAX_POINTS = 2000
+
+# /api/accounts recomputes both predictions per account on every (heartbeat-driven)
+# call. calculate_prediction only looks at the last 24h, so fetching the full
+# default 168h per account was wasted work — bound it to just over the window.
+ACCOUNT_BAR_PREDICTION_HOURS = 25
 
 
 def load_history(hours=None, max_points=None):
@@ -364,7 +385,8 @@ def api_accounts():
                 session_pct = (current['limits'].get('session') or {}).get('percent_remaining')
             # Same prediction the dashboard uses, so the mini-card color can match
             # the big STATUS card (a forecast overage escalates to amber even at low %).
-            history = db.get_history(account_id=acc['id'])
+            history = db.get_history(account_id=acc['id'],
+                                     hours=ACCOUNT_BAR_PREDICTION_HOURS)
             weekly_exceed = bool((calculate_prediction(history, 'weekly') or {}).get('will_exceed'))
             session_exceed = bool((calculate_prediction(history, 'session') or {}).get('will_exceed'))
         out.append({**acc, 'weekly_remaining': weekly, 'session_remaining': session_pct,
@@ -392,19 +414,28 @@ def accounts_add():
     if action == 'complete':
         verifier = session.get('oauth_verifier')
         expected_state = session.get('oauth_state')
-        if not verifier:
+        if not verifier or not expected_state:
             return jsonify({'error': 'Brak rozpoczętej sesji OAuth — kliknij „Dodaj konto" ponownie.'}), 400
         code = request.form.get('code', '').strip()
         if not code:
             return jsonify({'error': 'Wklej kod autoryzacyjny.'}), 400
-        # If the pasted code carries a state (code#state), it must match what we issued.
-        if '#' in code and expected_state and code.split('#', 1)[1] != expected_state:
-            return jsonify({'error': 'Niezgodny state — rozpocznij autoryzację ponownie.'}), 400
+        # The pasted value must be code#state and the state MUST match what we
+        # issued — always, not only when a '#' happens to be present. A bare code
+        # (no state) is rejected so a code from a different/forged authorization
+        # can't be completed against this session.
+        got_state = code.split('#', 1)[1] if '#' in code else ''
+        if got_state != expected_state:
+            return jsonify({'error': 'Niezgodny lub brakujący state — rozpocznij autoryzację ponownie.'}), 400
         try:
             tokens = oauth_flow.exchange_code(code, verifier)
             profile = oauth_flow.fetch_profile(tokens['access_token'])
         except oauth_flow.OAuthError as e:
             return jsonify({'error': str(e)}), 400
+        # Without an email we can't upsert-by-email, so repeated re-auth would mint
+        # a fresh duplicate account every time (and the account couldn't be
+        # backfilled). Refuse rather than silently proliferate rows.
+        if not profile.get('email'):
+            return jsonify({'error': 'Nie udało się odczytać adresu e-mail konta — spróbuj autoryzować ponownie.'}), 400
         db = get_db()
         label = request.form.get('label') or profile['email'] or 'Konto'
         acc_id = db.add_or_update_account(

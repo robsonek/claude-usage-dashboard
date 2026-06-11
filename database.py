@@ -59,6 +59,12 @@ class UsageDatabase:
     def __init__(self, db_path: str):
         """Initialize database connection and create tables if needed."""
         self.db_path = db_path
+        # check_same_thread=False lets the single shared connection be used from
+        # any worker thread. Safe under gunicorn's default *sync* workers (one
+        # request per process, one thread) and the collector (single-threaded).
+        # If you ever switch to threaded workers (gthread/gevent), this lone
+        # connection would interleave transactions across threads — give each
+        # thread its own connection (or a pool) before doing so.
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # WAL + a busy_timeout so the 5-min collector writes and the web app's
@@ -699,6 +705,14 @@ class UsageDatabase:
     def get_default_account_id(self):
         row = self.conn.execute(
             "SELECT id FROM accounts WHERE is_active=1 ORDER BY id ASC LIMIT 1").fetchone()
+        if row:
+            return row['id']
+        # No active account: if any account exists at all, scope to the lowest-id
+        # one rather than returning None. None would make get_current/get_history
+        # run unfiltered and merge EVERY account's snapshots into one series.
+        # Truly empty DB (legacy single-account era) → None (intentionally unscoped).
+        row = self.conn.execute(
+            "SELECT id FROM accounts ORDER BY id ASC LIMIT 1").fetchone()
         return row['id'] if row else None
 
     def backfill_account_by_email(self, account_id, email) -> int:
