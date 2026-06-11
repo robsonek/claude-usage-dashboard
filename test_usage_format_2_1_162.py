@@ -17,6 +17,7 @@ three quotas + Max account type are recovered.
 Run: python3 test_usage_format_2_1_162.py
 """
 import os
+from datetime import datetime, timezone
 
 from usage_fetcher import (
     emulate_terminal,
@@ -59,7 +60,10 @@ def test_account_type_max():
 
 def test_weekly_reset_parsed():
     clean = _load_clean()
-    quotas = parse_quotas(clean)
+    # Freeze the clock at the fixture's capture day: "Resets Jun 8" parsed after
+    # Jun 8 with the real clock rolls to next year (date has no year in /usage).
+    frozen_now = datetime(2026, 6, 4, 12, 0, tzinfo=timezone.utc)
+    quotas = parse_quotas(clean, now=frozen_now)
     weekly = next(q for q in quotas if q['type'] == 'weekly')
     # "Resets Jun 8 at 1pm (Europe/Warsaw)" -> 1pm Warsaw (UTC+2) == 11:00 UTC
     assert weekly.get('resets_at', '').startswith('2026-06-08T11:00'), \

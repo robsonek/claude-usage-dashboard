@@ -373,8 +373,11 @@ def parse_reset_time(lines: List[str], start_idx: int, quota_type: Optional[str]
     return reset_text, reset_time, duration_seconds
 
 
-def parse_quotas(text: str) -> List[Dict[str, Any]]:
-    """Parse limits from claude /usage output."""
+def parse_quotas(text: str, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """Parse limits from claude /usage output.
+
+    `now` is injectable for tests — fixture captures contain dates relative to
+    their capture day, so parsing them with the real clock is a time bomb."""
     text = text.replace('\r\n', '\n').replace('\r', '\n')
     lines = text.split('\n')
     quotas = []
@@ -390,7 +393,7 @@ def parse_quotas(text: str) -> List[Dict[str, Any]]:
                     if percent is not None:
                         try:
                             reset_text, reset_time, duration_seconds = parse_reset_time(
-                                lines, j, quota_type=quota_type)
+                                lines, j, quota_type=quota_type, now=now)
 
                             quota = {
                                 'type': quota_type,
