@@ -206,14 +206,15 @@ def claude_config(tmp_path, monkeypatch):
     return cfg
 
 
-def _fresh_creds(monkeypatch):
+def _fresh_creds(creds_path):
     """Make the stored token look fresh so fetch_usage skips the refresh path."""
-    far_future = int(time.time() * 1000) + 3_600_000
-    monkeypatch.setitem(CREDS['claudeAiOauth'], 'expiresAt', far_future)
+    data = json.loads(creds_path.read_text())
+    data['claudeAiOauth']['expiresAt'] = int(time.time() * 1000) + 3_600_000
+    creds_path.write_text(json.dumps(data))
 
 
 def test_fetch_usage_returns_snapshot_format(creds_file, claude_config, monkeypatch):
-    _fresh_creds(monkeypatch)
+    _fresh_creds(creds_file)
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -237,7 +238,7 @@ def test_fetch_usage_returns_snapshot_format(creds_file, claude_config, monkeypa
 
 
 def test_fetch_usage_missing_core_windows_raises(creds_file, claude_config, monkeypatch):
-    _fresh_creds(monkeypatch)
+    _fresh_creds(creds_file)
     monkeypatch.setattr(auf, '_urlopen',
                         lambda req, timeout=None: FakeResponse({'five_hour': None,
                                                                 'seven_day': None}))
@@ -246,7 +247,7 @@ def test_fetch_usage_missing_core_windows_raises(creds_file, claude_config, monk
 
 
 def test_email_none_when_config_missing(creds_file, tmp_path, monkeypatch):
-    _fresh_creds(monkeypatch)
+    _fresh_creds(creds_file)
     monkeypatch.setattr(auf, 'CLAUDE_CONFIG_FILE', str(tmp_path / 'absent.json'))
     monkeypatch.setattr(auf, '_urlopen',
                         lambda req, timeout=None: FakeResponse(PROD_SAMPLE))
