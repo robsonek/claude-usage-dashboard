@@ -290,38 +290,33 @@ Without authentication, the dashboard will show empty quota data.
 - Check disk space: `df -h`
 
 ### Dashboard shows empty quotas
-Typical causes and how to diagnose:
+Data comes from accounts added on the **Konta** page (multi-account OAuth) —
+the collector polls every *active* account. Typical causes and how to diagnose:
 
-1. Claude CLI not authenticated on the server — run `claude` manually and
-   complete the OAuth flow. The fetcher reads (and refreshes) the OAuth token
-   from `~/.claude/.credentials.json`; if the file is missing or the refresh
-   token was revoked, every fetch fails until you re-authenticate.
-2. Usage fetch failing — run the fetcher by hand and read its error:
+1. No active account — open the **Konta** page and check that at least one
+   account is added and active (re-authorize it there if its tokens were
+   revoked).
+2. Collector missing `TOKEN_ENCRYPTION_KEY` — cron does not load systemd's
+   `EnvironmentFile`, so `collect_history.sh` reads the key itself from `.env`.
+   Verify `.env` contains `TOKEN_ENCRYPTION_KEY=...`, then run the collector by
+   hand with the key:
 
    ```bash
    cd ~/claude-dashboard
-   venv/bin/python api_usage_fetcher.py
+   TOKEN_ENCRYPTION_KEY=$(grep -E '^TOKEN_ENCRYPTION_KEY=' .env | cut -d= -f2-) venv/bin/python collect_all.py; echo "exit=$?"
    ```
 
-   The collector (`collect_history.sh`) also logs
-   `WARN: fetcher returned error: ...` straight into `cron.log` when
-   something goes wrong — check it first:
+   Exit codes: `0` OK, `1` no active accounts, `2` at least one account
+   failed, `3` crash (e.g. missing/wrong encryption key).
+3. Check `cron.log` for what went wrong:
 
    ```bash
    tail -n 50 ~/claude-dashboard/cron.log
    ```
 
-   On a fetch error the collector still archives the `{"error": ...}` JSON
-   under `data/YYYY-MM-DD/` (skipped by the DB insert) and **exits non-zero**,
-   so a systemd timer / monitoring sees the failure instead of a misleading
-   success.
-3. Anthropic changed the (unofficial) oauth/usage endpoint — compare the raw
-   response with what `api_usage_fetcher.map_usage_response` expects:
-
-   ```bash
-   venv/bin/python -c "import api_usage_fetcher as a; \
-   c=a.load_credentials()['claudeAiOauth']; print(a._http_get_usage(c['accessToken']))"
-   ```
+   `WARN: at least one account failed` means a per-account error (details in
+   the lines above it and in the account's `last_error` on the Konta page);
+   `no active accounts to poll` means case 1.
 
 ### `cron.log` grows indefinitely
 Add a logrotate rule at `/etc/logrotate.d/claude-dashboard`:

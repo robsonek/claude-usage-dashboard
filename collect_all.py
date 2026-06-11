@@ -6,6 +6,7 @@ Sequential (2-3 accounts × ~1s); errors are isolated per account. Exit codes:
   0 — every active account polled OK
   1 — no active accounts to poll
   2 — at least one account failed (others still inserted)
+  3 — crash (e.g. missing/wrong TOKEN_ENCRYPTION_KEY → CryptoError)
 """
 import json
 import os
@@ -74,8 +75,15 @@ def run(db) -> int:
 
 
 def main() -> int:
-    with UsageDatabase(config.DB_FILE) as db:
-        return run(db)
+    try:
+        with UsageDatabase(config.DB_FILE) as db:
+            return run(db)
+    except Exception as e:
+        # e.g. CryptoError when TOKEN_ENCRYPTION_KEY is missing/wrong — return a
+        # distinct code so collect_history.sh logs a hard ERROR (not the benign
+        # exit-1 "no accounts" path).
+        _log(f'ERROR: collect_all crashed: {type(e).__name__}: {e}')
+        return 3
 
 
 if __name__ == '__main__':

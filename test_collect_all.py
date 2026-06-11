@@ -77,3 +77,11 @@ def test_one_account_failing_does_not_block_others(db, tmp_path, monkeypatch):
 def test_no_accounts_returns_one(db, monkeypatch, tmp_path):
     monkeypatch.setattr(collect_all, 'DATA_DIR', str(tmp_path / 'data'))
     assert collect_all.run(db) == 1  # nothing to poll
+
+
+def test_main_returns_3_on_crash(monkeypatch):
+    class Boom:
+        def __enter__(self): raise RuntimeError('decrypt failed')
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(collect_all, 'UsageDatabase', lambda *a, **k: Boom())
+    assert collect_all.main() == 3

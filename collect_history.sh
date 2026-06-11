@@ -6,6 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$SCRIPT_DIR/data"
 VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
 
+# Cron doesn't load systemd's EnvironmentFile, so pull the one secret the
+# collector needs (token decryption key) straight from .env.
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    export TOKEN_ENCRYPTION_KEY="$(grep -E '^TOKEN_ENCRYPTION_KEY=' "$SCRIPT_DIR/.env" | tail -1 | cut -d= -f2-)"
+fi
+
 log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
 # TODAY gates the once-per-day retention cleanup; DATA_DIR must exist for the

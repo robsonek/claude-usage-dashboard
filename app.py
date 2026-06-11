@@ -364,6 +364,10 @@ def accounts_add():
        Step 2 (action=complete): validate state, exchange code, fetch profile, save."""
     action = request.form.get('action')
     if action == 'start':
+        # Fail before the user authorizes: without the key we couldn't store the
+        # tokens, and the one-time OAuth code would already be burned by then.
+        if not config.TOKEN_ENCRYPTION_KEY:
+            return jsonify({'error': 'TOKEN_ENCRYPTION_KEY nie jest ustawiony — nie można bezpiecznie zapisać tokenów.'}), 400
         pkce = oauth_flow.generate_pkce()
         state = oauth_flow.generate_state()
         session['oauth_verifier'] = pkce['verifier']
