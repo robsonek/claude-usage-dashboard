@@ -162,3 +162,12 @@ def test_dashboard_vendors_chart_libs_locally():
     # Sanity: non-empty, looks like the real minified library, not an error page.
     assert os.path.getsize(chart) > 50_000
     assert os.path.getsize(adapter) > 20_000
+
+
+def test_vendored_libs_have_no_dangling_sourcemap_ref():
+    """The .map files aren't vendored (no value for a third-party lib), so the
+    minified files must not reference one — otherwise devtools requests
+    chart.umd.js.map and gets a 404 in the console."""
+    for name in ("chart.umd.min.js", "chartjs-adapter-date-fns.bundle.min.js"):
+        content = _read(os.path.join("static/vendor", name))
+        assert "sourceMappingURL" not in content, f"{name} still references a source map"
