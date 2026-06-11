@@ -20,9 +20,12 @@
                     <span id="fresh-text">--</span>
                 </span>
                 <button id="refresh-btn" class="btn-refresh">↻ Refresh</button>
+                <a href="{{ url_for('accounts_page') }}" class="btn-refresh" title="Zarządzaj kontami">Konta</a>
                 <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
             </div>
         </header>
+
+        <div class="account-bar" id="account-bar" hidden></div>
 
         <!-- Current status cards -->
         <div class="section-label">Status</div>
@@ -130,6 +133,37 @@
     </div>
 
     <script>
+        // ---- Multi-account switcher ----
+        let currentAccount = localStorage.getItem('account_id') || null;
+
+        async function loadAccountBar() {
+            const res = await fetch('/api/accounts');
+            const accounts = await res.json();
+            const active = accounts.filter(a => a.is_active);
+            const bar = document.getElementById('account-bar');
+            if (active.length <= 1) { bar.hidden = true; if (active[0]) currentAccount = String(active[0].id); return; }
+            if (!currentAccount || !active.some(a => String(a.id) === String(currentAccount)))
+                currentAccount = String(active[0].id);
+            bar.hidden = false;
+            bar.innerHTML = active.map(a => `
+                <button class="acc-mini ${String(a.id)===String(currentAccount)?'active':''}"
+                        onclick="switchAccount('${a.id}')">
+                    <span class="acc-mini-label">${a.label}</span>
+                    <span class="acc-mini-stats">7d ${a.weekly_remaining ?? '--'}% · 5h ${a.session_remaining ?? '--'}%</span>
+                </button>`).join('');
+        }
+
+        function switchAccount(id) {
+            currentAccount = String(id);
+            localStorage.setItem('account_id', currentAccount);
+            loadAccountBar();
+            forceRefresh();
+        }
+
+        function accountQuery(prefix) {
+            return currentAccount ? `${prefix}account=${encodeURIComponent(currentAccount)}` : '';
+        }
+
         // Custom plugin: draw vertical dotted lines at period boundaries.
         // Reads `chart.options.plugins.resetMarkers.lines` — array of ISO timestamps.
         // Lines outside the plot area are clipped automatically.
@@ -413,7 +447,7 @@
 
         async function updateCurrentStatus() {
             try {
-                const response = await fetch('/api/current');
+                const response = await fetch('/api/current?' + accountQuery(''));
                 const data = await response.json();
 
                 if (data.error) {
@@ -456,7 +490,7 @@
                 currentTimeRange = hours;
             }
             try {
-                const historyRes = await fetch(`/api/history?hours=${currentTimeRange}`);
+                const historyRes = await fetch(`/api/history?hours=${currentTimeRange}&` + accountQuery(''));
                 const history = await historyRes.json();
 
                 if (!Array.isArray(history) || history.length === 0) {
@@ -591,7 +625,7 @@
         // Update predictions
         async function updatePredictions() {
             try {
-                const response = await fetch('/api/prediction');
+                const response = await fetch('/api/prediction?' + accountQuery(''));
                 const predictions = await response.json();
 
                 updatePredictionCard('prediction-weekly', predictions.weekly);
@@ -757,6 +791,7 @@
                 lastSnapshotTs = ts;
                 await updateCharts();
                 await updatePredictions();
+                loadAccountBar();                      // keep per-account %s fresh
             }
         }
 
@@ -770,6 +805,7 @@
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             initCharts();
+            loadAccountBar();
             forceRefresh();
 
             // Event-driven auto refresh: the heartbeat detects a new snapshot

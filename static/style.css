@@ -153,3 +153,21 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
   .status-value{font-size:1.6rem}
   .chart-container canvas{height:190px!important}
 }
+
+.account-bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
+.acc-mini { background: #0c1518; border: 1px solid #16323a; border-radius: 8px;
+    padding: 6px 12px; color: #6fe3d2; cursor: pointer; text-align: left;
+    display: flex; flex-direction: column; min-width: 120px; }
+.acc-mini.active { border-color: #2de0c6; box-shadow: 0 0 0 1px #2de0c6 inset; }
+.acc-mini-label { font-weight: 600; font-size: 0.9rem; }
+.acc-mini-stats { font-size: 0.72rem; color: #4f8c84; }
+.account-row { display: flex; gap: 12px; align-items: center; padding: 8px 0;
+    border-bottom: 1px solid #16323a; font-size: 0.9rem; }
+.acc-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.acc-dot.on { background: #2de0c6; } .acc-dot.off { background: #555; }
+.acc-email { color: #4f8c84; } .acc-error { color: #e36f6f; font-size: 0.75rem; }
+.acc-actions { margin-left: auto; display: flex; gap: 6px; }
+.acc-actions button, .add-account button { background: #0c1518; color: #6fe3d2;
+    border: 1px solid #16323a; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.add-account { margin-top: 24px; } .add-account input { margin: 4px 6px 4px 0;
+    background: #0c1518; border: 1px solid #16323a; color: #cfeee8; padding: 6px; border-radius: 6px; }
