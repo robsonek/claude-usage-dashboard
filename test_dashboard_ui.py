@@ -140,3 +140,25 @@ def test_dashboard_dropped_blind_5min_full_refresh():
     heavy refreshes are now gated on a new snapshot, not a wall clock."""
     html = _read("templates/dashboard.html")
     assert "5 * 60 * 1000" not in html
+
+
+def test_dashboard_does_not_load_scripts_from_third_party_cdn():
+    """Audit point 3: no runtime <script src> to a third-party CDN. A floating
+    version with no SRI means a compromised CDN injects arbitrary JS into the
+    logged-in dashboard. Chart libs are vendored under static/ instead."""
+    html = _read("templates/dashboard.html")
+    for cdn in ("cdn.jsdelivr.net", "cdnjs.cloudflare.com", "unpkg.com"):
+        assert cdn not in html, f"third-party CDN reference still present: {cdn}"
+
+
+def test_dashboard_vendors_chart_libs_locally():
+    html = _read("templates/dashboard.html")
+    assert "vendor/chart.umd.min.js" in html
+    assert "vendor/chartjs-adapter-date-fns.bundle.min.js" in html
+    chart = os.path.join(BASE, "static/vendor/chart.umd.min.js")
+    adapter = os.path.join(BASE, "static/vendor/chartjs-adapter-date-fns.bundle.min.js")
+    assert os.path.exists(chart), "vendored Chart.js missing"
+    assert os.path.exists(adapter), "vendored date-fns adapter missing"
+    # Sanity: non-empty, looks like the real minified library, not an error page.
+    assert os.path.getsize(chart) > 50_000
+    assert os.path.getsize(adapter) > 20_000

@@ -6,8 +6,11 @@
     <meta name="theme-color" content="#0a0e12">
     <title>Claude Usage Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <!-- Vendored locally (pinned Chart.js 4.4.6 + adapter 3.0.0): no third-party
+         CDN dependency at runtime, so a compromised CDN can't inject script into
+         the logged-in dashboard. Update by re-downloading the pinned versions. -->
+    <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js') }}"></script>
 </head>
 <body>
     <div class="dashboard">

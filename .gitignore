@@ -43,3 +43,6 @@ Thumbs.db
 .env
 .env.local
 CLAUDE.md
+
+# Internal audit reports (local only, reference file paths/line numbers)
+docs/audyt-*.md

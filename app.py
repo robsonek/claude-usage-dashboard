@@ -43,9 +43,16 @@ _login_fails = defaultdict(list)
 
 
 def _client_ip() -> str:
-    fwd = request.headers.get('X-Forwarded-For', '')
-    if fwd:
-        return fwd.split(',')[0].strip()
+    # The throttle keys on this value, so it must come from a header the edge
+    # controls. Behind Cloudflare, CF-Connecting-IP is set by the edge and
+    # overwrites any client-supplied value. X-Forwarded-For's first element is
+    # attacker-controlled (the edge APPENDS the real IP rather than replacing the
+    # chain), so trusting it would let a brute-forcer rotate the bucket every
+    # request — and balloon _login_fails with one entry per forged IP. Fall back
+    # to the direct peer, never to XFF.
+    cf = request.headers.get('CF-Connecting-IP', '').strip()
+    if cf:
+        return cf
     return request.remote_addr or 'unknown'
 
 

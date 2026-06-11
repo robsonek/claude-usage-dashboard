@@ -559,9 +559,13 @@ class UsageDatabase:
 
     @staticmethod
     def _format_timestamp(captured_at) -> str:
-        if isinstance(captured_at, str):
-            return captured_at
-        return captured_at.strftime('%Y-%m-%dT%H:%M:%SZ')
+        """Normalize a snapshot's captured_at to ISO-8601 with a 'T' separator and
+        trailing 'Z'. The SQLite adapter stores datetimes as
+        'YYYY-MM-DD HH:MM:SS+00:00' (space separator); handing that back verbatim
+        broke `new Date(...)` on Safari/iOS (Invalid Date → blank charts). Falls
+        back to the raw value only if it can't be parsed."""
+        iso = UsageDatabase._format_iso_z(captured_at)
+        return iso if iso is not None else str(captured_at)
 
     def _format_duration(self, seconds: int) -> str:
         """Format seconds as human-readable text."""
@@ -623,7 +627,15 @@ class UsageDatabase:
         return [dict(row) for row in cur.fetchall()]
 
     def get_pollable_accounts(self):
-        """Active accounts with DECRYPTED tokens, for the collector."""
+        """Active accounts with DECRYPTED tokens, for the collector.
+
+        Decryption is per-row and isolated: if ONE account's stored token can't
+        be decrypted (corrupt blob, or encrypted under a different key), it's
+        skipped and flagged via last_error so the UI surfaces it — the rest of
+        the accounts still get polled. A globally missing/wrong key raises
+        CryptoError on the first row instead, and that propagates so collect_all
+        exits 3 (hard ERROR) rather than masquerading as 'no accounts to poll'.
+        """
         # Lazy import (see add_or_update_account): keep database.py importable
         # before cryptography is installed on first deploy.
         import crypto_util
@@ -635,8 +647,16 @@ class UsageDatabase:
         out = []
         for row in cur.fetchall():
             d = dict(row)
-            d['access_token'] = crypto_util.decrypt(d['access_token'])
-            d['refresh_token'] = crypto_util.decrypt(d['refresh_token'])
+            try:
+                d['access_token'] = crypto_util.decrypt(d['access_token'])
+                d['refresh_token'] = crypto_util.decrypt(d['refresh_token'])
+            except crypto_util.CryptoError:
+                raise  # key missing entirely → let collect_all fail hard (exit 3)
+            except Exception as e:
+                # This single row is undecryptable — isolate it, don't sink the run.
+                self.record_account_poll(
+                    d['id'], error=f'token decrypt failed: {type(e).__name__}')
+                continue
             out.append(d)
         return out
 

@@ -60,6 +60,34 @@ def test_get_pollable_accounts_decrypts_tokens(db):
     assert pollable[0]['refresh_token'] == 'RT-1'
 
 
+def test_pollable_skips_undecryptable_row_and_records_error(db):
+    """Audit point 7: one account whose stored token can't be decrypted (corrupt
+    blob, or encrypted under a different key) must not blow up the whole poll. It
+    is skipped from the pollable list and flagged via last_error, so every other
+    account still gets collected and the UI shows the failure."""
+    good = _add(db, email='good@x.com')
+    bad = _add(db, email='bad@x.com')
+    db.conn.execute("UPDATE accounts SET access_token='not-a-valid-fernet-token' WHERE id=?",
+                    (bad,))
+    db.conn.commit()
+    pollable = db.get_pollable_accounts()
+    assert {p['email'] for p in pollable} == {'good@x.com'}
+    by_id = {a['id']: a for a in db.list_accounts()}
+    assert by_id[bad]['last_error'] is not None
+    assert by_id[good]['last_error'] is None
+
+
+def test_pollable_missing_key_still_raises(db, monkeypatch):
+    """A globally missing/wrong key is a different failure from one corrupt row:
+    it must still propagate (CryptoError) so collect_all exits 3 (hard ERROR),
+    not get silently swallowed as 'no accounts'."""
+    _add(db, email='a@x.com')
+    monkeypatch.setattr(config, 'TOKEN_ENCRYPTION_KEY', None)
+    crypto_util._reset_cache()
+    with pytest.raises(crypto_util.CryptoError):
+        db.get_pollable_accounts()
+
+
 def test_upsert_by_email_updates_not_duplicates(db):
     first = _add(db, access_token='AT-1')
     second = _add(db, access_token='AT-2', label='Renamed')
