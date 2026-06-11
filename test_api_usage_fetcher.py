@@ -253,3 +253,25 @@ def test_email_none_when_config_missing(creds_file, tmp_path, monkeypatch):
                         lambda req, timeout=None: FakeResponse(PROD_SAMPLE))
     result = auf.fetch_usage()
     assert result['email'] is None
+
+
+# ---- CLI contract (exit codes drive the collect_history.sh fallback) ----
+
+def test_main_success_prints_json_and_exits_zero(creds_file, claude_config,
+                                                 monkeypatch, capsys):
+    _fresh_creds(creds_file)
+    monkeypatch.setattr(auf, '_urlopen',
+                        lambda req, timeout=None: FakeResponse(PROD_SAMPLE))
+    assert auf.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out['source'] == 'api'
+    assert len(out['quotas']) == 3
+
+
+def test_main_failure_prints_error_json_and_exits_one(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(auf, 'CREDENTIALS_FILE', str(tmp_path / 'absent.json'))
+    assert auf.main() == 1
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out['error'] == 'API usage fetch failed'
+    assert 'api_usage_fetcher' in captured.err

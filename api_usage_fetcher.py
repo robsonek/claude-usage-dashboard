@@ -228,3 +228,23 @@ def fetch_usage() -> Dict[str, Any]:
         'captured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'source': 'api',
     }
+
+
+def main() -> int:
+    """CLI entry: snapshot JSON on stdout, exit 0; error JSON + exit 1 on failure.
+
+    Non-zero exit is the fallback signal for collect_history.sh. Error details
+    go to stderr (cron log); they never contain token material.
+    """
+    try:
+        result = fetch_usage()
+    except Exception as e:
+        print(json.dumps({'error': 'API usage fetch failed', 'details': str(e)}))
+        print(f'[api_usage_fetcher] {e}', file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
