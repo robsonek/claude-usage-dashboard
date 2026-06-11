@@ -8,11 +8,10 @@ VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
 
 log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
-# Create directory for today's data
+# TODAY gates the once-per-day retention cleanup; DATA_DIR must exist for the
+# lock file (collect_all.py creates its own per-day backup dirs underneath).
 TODAY=$(date +%Y-%m-%d)
-TIME=$(date +%H-%M)
-DAY_DIR="$DATA_DIR/$TODAY"
-mkdir -p "$DAY_DIR"
+mkdir -p "$DATA_DIR"
 
 if [ ! -x "$VENV_PYTHON" ]; then
     log "ERROR: venv Python not found at $VENV_PYTHON"
@@ -27,41 +26,17 @@ if ! flock -n 9; then
     exit 0
 fi
 
-# Fetch data from the oauth/usage HTTP API (api_usage_fetcher.py). On failure
-# it prints an {"error": ...} JSON and exits non-zero — the JSON is still
-# archived below for diagnosis (insert_to_db skips it) and the run exits 2 at
-# the very end so the timer/monitoring sees the failure.
-USAGE_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/api_usage_fetcher.py")
-FETCH_STATUS=$?
-
-if [ -z "$USAGE_JSON" ]; then
-    log "ERROR: api_usage_fetcher.py exited with $FETCH_STATUS and produced no output"
-    exit 1
-fi
-
-# Warn (don't fail yet) on fetch problems — the JSON is still written so we can
-# inspect later. A hard fetcher error (e.g. auth) is persistent, so we record it
-# and exit non-zero at the very end (after artifacts are saved) so the timer unit
-# / monitoring actually sees the failure instead of a misleading success.
+# Poll all active accounts (collect_all.py handles refresh, fetch, per-account
+# snapshot insert + JSON backup, and per-account error isolation).
 FETCH_ERROR=0
-if echo "$USAGE_JSON" | grep -q '"error"'; then
-    log "WARN: fetcher returned error: $(echo "$USAGE_JSON" | head -c 200)"
-    FETCH_ERROR=1
-elif echo "$USAGE_JSON" | grep -q '"quotas": \[\]'; then
-    log "WARN: fetcher returned empty quotas"
-fi
-
-# Save to JSON file (history / reproducibility) — write atomically so a crash or
-# overlap can't leave a half-written/corrupt file.
-TMP_JSON="$DAY_DIR/.$TIME.$$.json"
-printf '%s\n' "$USAGE_JSON" > "$TMP_JSON" && mv -f "$TMP_JSON" "$DAY_DIR/$TIME.json"
-
-# Save to SQLite database (insert_to_db.py skips pure-error AND empty-quota records
-# itself — a glitched read with no quotas isn't persisted, only the JSON/raw_debug above)
-if ! echo "$USAGE_JSON" | "$VENV_PYTHON" "$SCRIPT_DIR/insert_to_db.py"; then
-    log "ERROR: insert_to_db.py failed"
-    exit 1
-fi
+"$VENV_PYTHON" "$SCRIPT_DIR/collect_all.py"
+FETCH_STATUS=$?
+case $FETCH_STATUS in
+    0) : ;;                                   # all accounts OK
+    1) log "WARN: no active accounts to poll" ;;
+    2) log "WARN: at least one account failed (see above)"; FETCH_ERROR=1 ;;
+    *) log "ERROR: collect_all.py exited $FETCH_STATUS"; exit 1 ;;
+esac
 
 # Retention cleanup, at most once per day (date-marker gated). Runs inside the
 # existing flock. Housekeeping only: a failure is logged but never fails the
