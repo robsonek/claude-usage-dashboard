@@ -32,3 +32,8 @@ PASSWORD_HASH = generate_password_hash(_env_password or 'claude123')
 
 # Session
 SESSION_LIFETIME_HOURS = 24
+
+# Fernet key for encrypting OAuth tokens at rest in the accounts table.
+# Generate once: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Store in .env (never in repo/rsync). Losing it = re-add every account.
+TOKEN_ENCRYPTION_KEY = os.environ.get('TOKEN_ENCRYPTION_KEY')
