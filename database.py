@@ -168,7 +168,8 @@ class UsageDatabase:
             if resets_at is not None and not self._resets_at_is_plausible(
                     quota.get('type'), captured_at, resets_at):
                 carried = self._prev_resets_at(
-                    quota.get('type'), quota.get('model'), captured_at)
+                    quota.get('type'), quota.get('model'), captured_at,
+                    data.get('account_id'))
                 if carried is not None:
                     resets_at = carried
                 else:
@@ -178,7 +179,8 @@ class UsageDatabase:
                     resets_at = captured_at + timedelta(hours=period_hours)
 
             period_start_at = self._compute_period_start_at(
-                quota.get('type'), quota.get('model'), captured_at, resets_at
+                quota.get('type'), quota.get('model'), captured_at, resets_at,
+                data.get('account_id')
             )
 
             cursor.execute("""
@@ -200,7 +202,8 @@ class UsageDatabase:
 
     def _compute_period_start_at(self, quota_type: Optional[str], model: Optional[str],
                                   captured_at: datetime,
-                                  resets_at: Optional[datetime]) -> Optional[datetime]:
+                                  resets_at: Optional[datetime],
+                                  account_id: Optional[int] = None) -> Optional[datetime]:
         """Determine when the current period started, distinguishing reset from shift.
 
         - same resets_at as previous snapshot → inherit prev.period_start_at
@@ -213,6 +216,10 @@ class UsageDatabase:
         The reset/shift distinction must compare prev.resets_at with *current*.captured_at,
         not prev.captured_at — at prev.captured_at the deadline was always in the future
         (otherwise prev wouldn't have observed it as the active resets_at).
+
+        `account_id` scopes "previous" to the SAME account (SQLite `IS ?` matches
+        a real id to that id and a None param to legacy NULL-account rows), so
+        polling account B never inherits account A's reset anchor.
         """
         if not resets_at:
             return None
@@ -224,11 +231,12 @@ class UsageDatabase:
             JOIN snapshots s ON s.id = q.snapshot_id
             WHERE q.quota_type = ?
               AND ((q.model IS NULL AND ? IS NULL) OR q.model = ?)
+              AND s.account_id IS ?
               AND s.captured_at < ?
               AND q.resets_at IS NOT NULL
             ORDER BY s.captured_at DESC
             LIMIT 1
-        """, (quota_type, model, model, captured_at))
+        """, (quota_type, model, model, account_id, captured_at))
         prev = cursor.fetchone()
 
         fallback_hours = _DEFAULT_PERIOD_HOURS.get(quota_type, 168)
@@ -288,10 +296,15 @@ class UsageDatabase:
         return (resets_at - captured_at) <= horizon
 
     def _prev_resets_at(self, quota_type: Optional[str], model: Optional[str],
-                        captured_at: datetime) -> Optional[datetime]:
+                        captured_at: datetime,
+                        account_id: Optional[int] = None) -> Optional[datetime]:
         """The most recent stored resets_at for this quota before captured_at.
         Values stored going forward are already sanitized, so this is a known
-        good reset instant to carry forward when the current reading glitches."""
+        good reset instant to carry forward when the current reading glitches.
+
+        `account_id` scopes the lookup to the same account (`IS ?`: real id → that
+        id, None → legacy NULL rows), so one account never carries another's reset.
+        """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT q.resets_at
@@ -299,11 +312,12 @@ class UsageDatabase:
             JOIN snapshots s ON s.id = q.snapshot_id
             WHERE q.quota_type = ?
               AND ((q.model IS NULL AND ? IS NULL) OR q.model = ?)
+              AND s.account_id IS ?
               AND s.captured_at < ?
               AND q.resets_at IS NOT NULL
             ORDER BY s.captured_at DESC
             LIMIT 1
-        """, (quota_type, model, model, captured_at))
+        """, (quota_type, model, model, account_id, captured_at))
         row = cursor.fetchone()
         return self._parse_dt(row['resets_at']) if row else None
 
@@ -334,7 +348,8 @@ class UsageDatabase:
             return None
 
         result = self._snapshot_to_dict(row)
-        self._fill_missing_quotas(result['limits'], row['id'], row['captured_at'])
+        self._fill_missing_quotas(result['limits'], row['id'], row['captured_at'],
+                                  account_id)
         return result
 
     def get_history(self, hours: Optional[int] = None,
@@ -361,18 +376,21 @@ class UsageDatabase:
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        acct_sql = " AND account_id = ?" if account_id is not None else ""
+        # Default branch joins snapshots s ⋈ quotas q, so qualify the column as
+        # s.account_id; the id-only scan below is single-table (unqualified).
         acct_params = (account_id,) if account_id is not None else ()
+        acct_sql_joined = " AND s.account_id = ?" if account_id is not None else ""
+        acct_sql_scan = " AND account_id = ?" if account_id is not None else ""
 
         cursor = self.conn.cursor()
 
         # Default: filter the JOIN by captured_at (covering index) — unchanged path.
-        where, params = "s.captured_at >= ?" + acct_sql, (cutoff,) + acct_params
+        where, params = "s.captured_at >= ?" + acct_sql_joined, (cutoff,) + acct_params
         if max_points and max_points >= 2:
             # Cheap id-only scan (covering index) tells us the count up front so we
             # can cap the expensive quota JOIN + dict build for long ranges.
             cursor.execute(
-                "SELECT id FROM snapshots WHERE captured_at >= ?" + acct_sql +
+                "SELECT id FROM snapshots WHERE captured_at >= ?" + acct_sql_scan +
                 " ORDER BY captured_at ASC, id ASC", (cutoff,) + acct_params)
             ids = [row['id'] for row in cursor.fetchall()]
             if len(ids) > max_points:
@@ -442,7 +460,8 @@ class UsageDatabase:
         }
 
     def _fill_missing_quotas(self, limits: Dict[str, Any],
-                             snapshot_id: int, captured_at) -> None:
+                             snapshot_id: int, captured_at,
+                             account_id: Optional[int] = None) -> None:
         """Carry the last known value forward for any expected quota missing from
         the latest snapshot, tagging it stale. Mutates `limits` in place.
 
@@ -464,23 +483,31 @@ class UsageDatabase:
           (`resets_at <= captured_at`): a reset fired during the outage, so the
           old percentage and its now-past resets_at would be actively wrong.
           "Previous value" only means something within the same period.
+
+        `account_id` scopes the carry-forward to the same account (`s.account_id
+        IS ?`: real id → that id, None → legacy NULL rows / cross-account legacy
+        behavior), so account A never backfills from account B's snapshot.
         """
         captured_dt = self._parse_dt(captured_at)
+        acct_sql = " AND s.account_id IS ?" if account_id is not None else ""
         for quota_type in _FALLBACK_QUOTA_TYPES:
             if quota_type in limits:
                 continue
             cursor = self.conn.cursor()
-            cursor.execute("""
+            params = (quota_type, snapshot_id)
+            if account_id is not None:
+                params = (quota_type, snapshot_id, account_id)
+            cursor.execute(f"""
                 SELECT q.quota_type, q.model, q.percent_remaining, q.resets_at,
                        q.time_remaining_seconds, q.period_start_at, s.captured_at
                 FROM quotas q
                 JOIN snapshots s ON s.id = q.snapshot_id
                 WHERE q.quota_type = ?
-                  AND s.id < ?
+                  AND s.id < ?{acct_sql}
                   AND (q.model IS NULL OR q.model = 'sonnet')
                 ORDER BY s.captured_at DESC, q.id DESC
                 LIMIT 1
-            """, (quota_type, snapshot_id))
+            """, params)
             prev = cursor.fetchone()
             if not prev:
                 continue
@@ -558,6 +585,8 @@ class UsageDatabase:
                               access_token, refresh_token, expires_at) -> int:
         """Insert a new account or, if one with the same email exists, refresh
         its tokens/label/type. Tokens are stored encrypted. Returns the id."""
+        # Lazy import: database.py must import on first deploy before `cryptography`
+        # is pip-installed; only the account paths actually need it.
         import crypto_util
         enc_at = crypto_util.encrypt(access_token)
         enc_rt = crypto_util.encrypt(refresh_token)
@@ -595,6 +624,8 @@ class UsageDatabase:
 
     def get_pollable_accounts(self):
         """Active accounts with DECRYPTED tokens, for the collector."""
+        # Lazy import (see add_or_update_account): keep database.py importable
+        # before cryptography is installed on first deploy.
         import crypto_util
         cur = self.conn.execute("""
             SELECT id, label, email, account_type, access_token, refresh_token,
@@ -610,6 +641,8 @@ class UsageDatabase:
         return out
 
     def update_account_tokens(self, account_id, access_token, refresh_token, expires_at):
+        # Lazy import (see add_or_update_account): keep database.py importable
+        # before cryptography is installed on first deploy.
         import crypto_util
         self.conn.execute("""
             UPDATE accounts SET access_token=?, refresh_token=?, expires_at=?
@@ -634,7 +667,12 @@ class UsageDatabase:
         self.conn.commit()
 
     def delete_account(self, account_id):
-        """Remove the account row. Snapshots keep their account_id (history stays)."""
+        """Remove the account row. Snapshots keep their account_id (history stays).
+
+        Known tradeoff: re-adding the same email mints a NEW id (the old row is
+        gone), and backfill_account_by_email only adopts account_id IS NULL rows,
+        so the deleted account's old snapshots stay orphaned under the old id.
+        """
         self.conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
         self.conn.commit()
 
@@ -671,10 +709,12 @@ class UsageDatabase:
         """
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT q.id, q.quota_type, q.model, q.resets_at, q.period_start_at, s.captured_at
+            SELECT q.id, q.quota_type, q.model, q.resets_at, q.period_start_at,
+                   s.captured_at, s.account_id
             FROM quotas q
             JOIN snapshots s ON s.id = q.snapshot_id
-            ORDER BY q.quota_type ASC, COALESCE(q.model, ''), s.captured_at ASC, q.id ASC
+            ORDER BY q.quota_type ASC, COALESCE(q.model, ''),
+                     COALESCE(s.account_id, -1), s.captured_at ASC, q.id ASC
         """)
 
         prev_by_key: Dict[tuple, Dict[str, Any]] = {}
@@ -682,7 +722,9 @@ class UsageDatabase:
         resets_updates: List[tuple] = []
 
         for row in cursor.fetchall():
-            key = (row['quota_type'], row['model'])
+            # Partition by account too, so one account's history never seeds
+            # another's reset/shift classification (matches insert-time scoping).
+            key = (row['quota_type'], row['model'], row['account_id'])
             stored_resets = self._parse_dt(row['resets_at'])
             captured_at = self._parse_dt(row['captured_at'])
             stored_psa = self._parse_dt(row['period_start_at'])

@@ -1,5 +1,6 @@
 """Tests for accounts table schema, CRUD, token encryption, account_id wiring."""
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from cryptography.fernet import Fernet
@@ -100,12 +101,19 @@ def test_get_default_account_id_first_active(db):
     assert db.get_default_account_id() == b
 
 
-SNAP = lambda acc_id, pct: {
-    'account_id': acc_id, 'account_type': 'max', 'email': 'a@x.com',
-    'captured_at': '2026-06-11T07:00:00Z',
-    'quotas': [{'type': 'weekly', 'percent_remaining': pct,
-                'resets_at': '2026-06-15T11:00:00Z', 'time_remaining_seconds': 100}],
-}
+def SNAP(acc_id, pct, captured=None, resets=None):
+    """Build a weekly-quota snapshot. captured_at defaults to now (so the 168h
+    get_history cutoff always covers it — no time-bomb), resets_at a few days
+    ahead so _resets_at_is_plausible stays happy."""
+    cap = captured or datetime.now(timezone.utc)
+    res = resets or (cap + timedelta(days=4))
+    return {
+        'account_id': acc_id, 'account_type': 'max', 'email': 'a@x.com',
+        'captured_at': cap.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'quotas': [{'type': 'weekly', 'percent_remaining': pct,
+                    'resets_at': res.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                    'time_remaining_seconds': 100}],
+    }
 
 
 def test_insert_snapshot_persists_account_id(db):
@@ -134,3 +142,98 @@ def test_get_history_filters_by_account(db):
     hist_a = db.get_history(account_id=a)
     assert len(hist_a) == 1
     assert hist_a[0]['limits']['weekly']['percent_remaining'] == 11
+
+
+def _psa(db, account_id):
+    """Stored period_start_at (as tz-aware datetime) for the latest weekly quota
+    of account_id."""
+    row = db.conn.execute("""
+        SELECT q.period_start_at
+        FROM quotas q JOIN snapshots s ON s.id = q.snapshot_id
+        WHERE s.account_id = ? AND q.quota_type = 'weekly'
+        ORDER BY s.captured_at DESC, q.id DESC LIMIT 1
+    """, (account_id,)).fetchone()
+    raw = row['period_start_at']
+    return datetime.fromisoformat(str(raw).replace('Z', '+00:00').replace(' ', 'T'))
+
+
+def test_period_start_at_isolated_per_account(db):
+    """Interleaved inserts for two accounts whose weekly resets differ must not
+    let account B inherit account A's reset anchor (account-blind 'prev' bug)."""
+    a = _add(db, email='a@x.com')
+    b = _add(db, email='b@x.com')
+    now = datetime.now(timezone.utc)
+    # Distinct reset deadlines per account, both plausibly in the future.
+    reset_a = now + timedelta(days=2)
+    reset_b = now + timedelta(days=5)
+    # Two interleaved rounds: A then B, A then B (collect_all-style back-to-back).
+    db.insert_snapshot(dict(SNAP(a, 50, captured=now, resets=reset_a), email='a@x.com'))
+    db.insert_snapshot(dict(SNAP(b, 60, captured=now, resets=reset_b), email='b@x.com'))
+    db.insert_snapshot(dict(SNAP(a, 45, captured=now + timedelta(minutes=5),
+                                  resets=reset_a), email='a@x.com'))
+    db.insert_snapshot(dict(SNAP(b, 55, captured=now + timedelta(minutes=5),
+                                  resets=reset_b), email='b@x.com'))
+    # Expected period_start = reset - 168h (weekly default), computed from each
+    # account's OWN first row (same reset → inherit fallback from first insert).
+    exp_a = reset_a - timedelta(hours=168)
+    exp_b = reset_b - timedelta(hours=168)
+    assert abs((_psa(db, a) - exp_a).total_seconds()) < 1
+    assert abs((_psa(db, b) - exp_b).total_seconds()) < 1
+    assert _psa(db, a) != _psa(db, b)  # not cross-contaminated
+
+
+def test_fill_missing_quotas_isolated_per_account(db):
+    """A dropped quota on account A must be carried forward from A's own earlier
+    snapshot, never from account B."""
+    a = _add(db, email='a@x.com')
+    b = _add(db, email='b@x.com')
+    now = datetime.now(timezone.utc)
+    reset = now + timedelta(days=4)
+
+    def snap_with_model(acc, weekly_pct, model_pct, captured):
+        s = SNAP(acc, weekly_pct, captured=captured, resets=reset)
+        if model_pct is not None:
+            s['quotas'].append({
+                'type': 'model_specific', 'model': 'sonnet',
+                'percent_remaining': model_pct,
+                'resets_at': reset.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'time_remaining_seconds': 100,
+            })
+        return s
+
+    # Earlier A snapshot has model_specific=70; B snapshot has model_specific=99.
+    db.insert_snapshot(dict(snap_with_model(a, 50, 70, now), email='a@x.com'))
+    db.insert_snapshot(dict(snap_with_model(b, 60, 99, now + timedelta(minutes=1)),
+                            email='b@x.com'))
+    # A's LATEST snapshot drops model_specific entirely.
+    db.insert_snapshot(dict(snap_with_model(a, 45, None, now + timedelta(minutes=2)),
+                            email='a@x.com'))
+
+    cur_a = db.get_current(account_id=a)
+    ms = cur_a['limits']['model_specific']
+    assert ms['stale'] is True
+    assert ms['percent_remaining'] == 70  # from A's earlier row, not B's 99
+
+
+def test_backfill_account_by_email_targets_only_null_matching(db):
+    acc = _add(db, email='a@x.com')
+    now = datetime.now(timezone.utc)
+    # 1) NULL account, matching email -> should be backfilled
+    db.insert_snapshot(dict(SNAP(None, 10, captured=now), email='a@x.com'))
+    # 2) NULL account, different email -> untouched
+    db.insert_snapshot(dict(SNAP(None, 20, captured=now + timedelta(minutes=1)),
+                            email='other@x.com'))
+    # 3) already-assigned account_id, matching email -> untouched
+    other = _add(db, email='b@x.com')
+    db.insert_snapshot(dict(SNAP(other, 30, captured=now + timedelta(minutes=2)),
+                            email='a@x.com'))
+
+    updated = db.backfill_account_by_email(acc, 'a@x.com')
+    assert updated == 1  # only the NULL + a@x.com row
+
+    rows = db.conn.execute(
+        "SELECT email, account_id FROM snapshots ORDER BY captured_at ASC").fetchall()
+    by = {(r['email'], r['account_id']) for r in rows}
+    assert ('a@x.com', acc) in by          # the NULL row got acc
+    assert ('other@x.com', None) in by     # different email stayed NULL
+    assert ('a@x.com', other) in by        # already-assigned stayed put
