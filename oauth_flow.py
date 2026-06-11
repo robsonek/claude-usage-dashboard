@@ -15,11 +15,15 @@ from urllib.parse import urlencode
 
 from api_usage_fetcher import CLIENT_ID, TOKEN_URL, CLI_VERSION
 
-AUTHORIZE_URL = 'https://claude.ai/oauth/authorize'
+# Authorize host mirrors what the current Claude Code CLI itself generates
+# (claude.com/cai/...). The older claude.ai/oauth/authorize still renders a
+# code, but its codes kept failing at the token endpoint with 429 — likely
+# treated as invalid and rate-limited (anty-abuse).
+AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize'
 REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback'
 PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
-SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code',
-          'user:mcp_servers', 'user:file_upload']
+SCOPES = ['org:create_api_key', 'user:profile', 'user:inference',
+          'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload']
 
 _urlopen = urllib.request.urlopen
 
