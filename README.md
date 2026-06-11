@@ -286,11 +286,15 @@ Typical causes and how to diagnose:
    complete the OAuth flow.
 2. `claude` binary not in the cron job's PATH — verify the `PATH=...`
    line in `crontab -l`.
-3. Claude CLI UI changed — run the fetcher by hand with debug output:
+3. Claude CLI UI changed — affects only the PTY fallback. Since v1.1.0 the
+   primary fetch path is the oauth/usage HTTP API (`api_usage_fetcher.py`);
+   the PTY scraper runs only when the API path fails (look for
+   `WARN: API fetcher failed` in `cron.log`). Run either by hand:
 
    ```bash
    cd ~/claude-dashboard
-   DEBUG_USAGE_FETCHER=1 venv/bin/python usage_fetcher.py
+   venv/bin/python api_usage_fetcher.py            # primary (API)
+   DEBUG_USAGE_FETCHER=1 venv/bin/python usage_fetcher.py   # fallback (PTY)
    ```
 
    The collector (`collect_history.sh`) now also logs `WARN: empty quotas`
