@@ -27,3 +27,74 @@ def test_snapshots_has_account_id_column(db):
     cur = db.conn.execute("PRAGMA table_info(snapshots)")
     cols = {r['name'] for r in cur.fetchall()}
     assert 'account_id' in cols
+
+
+def _add(db, **kw):
+    base = dict(label='Main', email='a@x.com', account_type='max',
+                access_token='AT-1', refresh_token='RT-1', expires_at=1000)
+    base.update(kw)
+    return db.add_or_update_account(**base)
+
+
+def test_add_account_encrypts_tokens(db):
+    acc_id = _add(db)
+    row = db.conn.execute(
+        "SELECT access_token, refresh_token FROM accounts WHERE id=?", (acc_id,)).fetchone()
+    assert row['access_token'] != 'AT-1'  # stored encrypted
+    assert crypto_util.decrypt(row['access_token']) == 'AT-1'
+
+
+def test_list_accounts_omits_tokens(db):
+    _add(db)
+    accounts = db.list_accounts()
+    assert len(accounts) == 1
+    assert accounts[0]['email'] == 'a@x.com'
+    assert 'access_token' not in accounts[0]
+
+
+def test_get_pollable_accounts_decrypts_tokens(db):
+    _add(db)
+    pollable = db.get_pollable_accounts()
+    assert pollable[0]['access_token'] == 'AT-1'
+    assert pollable[0]['refresh_token'] == 'RT-1'
+
+
+def test_upsert_by_email_updates_not_duplicates(db):
+    first = _add(db, access_token='AT-1')
+    second = _add(db, access_token='AT-2', label='Renamed')
+    assert first == second  # same row
+    assert len(db.list_accounts()) == 1
+    assert db.get_pollable_accounts()[0]['access_token'] == 'AT-2'
+
+
+def test_update_account_tokens(db):
+    acc_id = _add(db)
+    db.update_account_tokens(acc_id, 'AT-NEW', 'RT-NEW', 2000)
+    p = db.get_pollable_accounts()[0]
+    assert (p['access_token'], p['refresh_token'], p['expires_at']) == ('AT-NEW', 'RT-NEW', 2000)
+
+
+def test_set_active_excludes_from_pollable(db):
+    acc_id = _add(db)
+    db.set_account_active(acc_id, False)
+    assert db.get_pollable_accounts() == []
+    assert len(db.list_accounts()) == 1  # still listed for UI
+
+
+def test_rename_and_record_poll_and_delete(db):
+    acc_id = _add(db)
+    db.rename_account(acc_id, 'New Label')
+    db.record_account_poll(acc_id, error='boom')
+    acc = db.list_accounts()[0]
+    assert acc['label'] == 'New Label'
+    assert acc['last_error'] == 'boom'
+    assert acc['last_polled_at'] is not None
+    db.delete_account(acc_id)
+    assert db.list_accounts() == []
+
+
+def test_get_default_account_id_first_active(db):
+    a = _add(db, email='a@x.com')
+    b = _add(db, email='b@x.com')
+    db.set_account_active(a, False)
+    assert db.get_default_account_id() == b

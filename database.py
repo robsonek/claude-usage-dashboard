@@ -541,6 +541,106 @@ class UsageDatabase:
 
         return ' '.join(parts) if parts else '0m'
 
+    # ---- accounts ----
+
+    def add_or_update_account(self, label, email, account_type,
+                              access_token, refresh_token, expires_at) -> int:
+        """Insert a new account or, if one with the same email exists, refresh
+        its tokens/label/type. Tokens are stored encrypted. Returns the id."""
+        import crypto_util
+        enc_at = crypto_util.encrypt(access_token)
+        enc_rt = crypto_util.encrypt(refresh_token)
+        cur = self.conn.cursor()
+        existing = None
+        if email:
+            existing = cur.execute(
+                "SELECT id FROM accounts WHERE email = ?", (email,)).fetchone()
+        if existing:
+            acc_id = existing['id']
+            cur.execute("""
+                UPDATE accounts SET label=?, account_type=?, access_token=?,
+                    refresh_token=?, expires_at=?, is_active=1, last_error=NULL
+                WHERE id=?
+            """, (label, account_type, enc_at, enc_rt, expires_at, acc_id))
+        else:
+            cur.execute("""
+                INSERT INTO accounts (label, email, account_type, access_token,
+                    refresh_token, expires_at, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            """, (label, email, account_type, enc_at, enc_rt, expires_at,
+                  datetime.now(timezone.utc)))
+            acc_id = cur.lastrowid
+        self.conn.commit()
+        return acc_id
+
+    def list_accounts(self):
+        """Account metadata for UI — never includes tokens."""
+        cur = self.conn.execute("""
+            SELECT id, label, email, account_type, is_active,
+                   created_at, last_polled_at, last_error
+            FROM accounts ORDER BY id ASC
+        """)
+        return [dict(row) for row in cur.fetchall()]
+
+    def get_pollable_accounts(self):
+        """Active accounts with DECRYPTED tokens, for the collector."""
+        import crypto_util
+        cur = self.conn.execute("""
+            SELECT id, label, email, account_type, access_token, refresh_token,
+                   expires_at
+            FROM accounts WHERE is_active = 1 ORDER BY id ASC
+        """)
+        out = []
+        for row in cur.fetchall():
+            d = dict(row)
+            d['access_token'] = crypto_util.decrypt(d['access_token'])
+            d['refresh_token'] = crypto_util.decrypt(d['refresh_token'])
+            out.append(d)
+        return out
+
+    def update_account_tokens(self, account_id, access_token, refresh_token, expires_at):
+        import crypto_util
+        self.conn.execute("""
+            UPDATE accounts SET access_token=?, refresh_token=?, expires_at=?
+            WHERE id=?
+        """, (crypto_util.encrypt(access_token), crypto_util.encrypt(refresh_token),
+              expires_at, account_id))
+        self.conn.commit()
+
+    def set_account_active(self, account_id, is_active: bool):
+        self.conn.execute("UPDATE accounts SET is_active=? WHERE id=?",
+                          (1 if is_active else 0, account_id))
+        self.conn.commit()
+
+    def rename_account(self, account_id, label: str):
+        self.conn.execute("UPDATE accounts SET label=? WHERE id=?", (label, account_id))
+        self.conn.commit()
+
+    def record_account_poll(self, account_id, error=None):
+        self.conn.execute(
+            "UPDATE accounts SET last_polled_at=?, last_error=? WHERE id=?",
+            (datetime.now(timezone.utc), error, account_id))
+        self.conn.commit()
+
+    def delete_account(self, account_id):
+        """Remove the account row. Snapshots keep their account_id (history stays)."""
+        self.conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        self.conn.commit()
+
+    def get_default_account_id(self):
+        row = self.conn.execute(
+            "SELECT id FROM accounts WHERE is_active=1 ORDER BY id ASC LIMIT 1").fetchone()
+        return row['id'] if row else None
+
+    def backfill_account_by_email(self, account_id, email) -> int:
+        """Attach legacy NULL-account snapshots with this email to account_id.
+        Returns the number of rows updated."""
+        cur = self.conn.execute(
+            "UPDATE snapshots SET account_id=? WHERE account_id IS NULL AND email=?",
+            (account_id, email))
+        self.conn.commit()
+        return cur.rowcount
+
     def get_snapshot_count(self) -> int:
         """Get total number of snapshots in database."""
         cursor = self.conn.cursor()
