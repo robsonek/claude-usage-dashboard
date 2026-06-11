@@ -348,12 +348,20 @@ def api_accounts():
     db = get_db()
     out = []
     for acc in db.list_accounts():
-        current = db.get_current(account_id=acc['id']) if acc['is_active'] else None
         weekly = session_pct = None
-        if current:
-            weekly = (current['limits'].get('weekly') or {}).get('percent_remaining')
-            session_pct = (current['limits'].get('session') or {}).get('percent_remaining')
-        out.append({**acc, 'weekly_remaining': weekly, 'session_remaining': session_pct})
+        weekly_exceed = session_exceed = False
+        if acc['is_active']:
+            current = db.get_current(account_id=acc['id'])
+            if current:
+                weekly = (current['limits'].get('weekly') or {}).get('percent_remaining')
+                session_pct = (current['limits'].get('session') or {}).get('percent_remaining')
+            # Same prediction the dashboard uses, so the mini-card color can match
+            # the big STATUS card (a forecast overage escalates to amber even at low %).
+            history = db.get_history(account_id=acc['id'])
+            weekly_exceed = bool((calculate_prediction(history, 'weekly') or {}).get('will_exceed'))
+            session_exceed = bool((calculate_prediction(history, 'session') or {}).get('will_exceed'))
+        out.append({**acc, 'weekly_remaining': weekly, 'session_remaining': session_pct,
+                    'weekly_will_exceed': weekly_exceed, 'session_will_exceed': session_exceed})
     return jsonify(out)
 
 

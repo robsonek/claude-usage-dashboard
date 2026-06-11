@@ -167,7 +167,22 @@
                     label.textContent = a.label;                 // textContent = no HTML injection
                     const stats = document.createElement('span');
                     stats.className = 'acc-mini-stats';
-                    stats.textContent = `7d ${a.weekly_remaining ?? '--'}% · 5h ${a.session_remaining ?? '--'}%`;
+                    // Match the STATUS cards: show % USED (not remaining) and color
+                    // each metric with the same logic — raw threshold, escalated to
+                    // amber when the prediction forecasts an overage (will_exceed).
+                    const metric = (lbl, remaining, willExceed) => {
+                        const span = document.createElement('span');
+                        if (remaining == null) { span.textContent = `${lbl} --%`; return span; }
+                        const used = Math.round(100 - remaining);
+                        span.textContent = `${lbl} ${used}%`;
+                        let cls = getProgressClass(used);
+                        if (willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
+                        span.className = cls;   // ok | warning | critical
+                        return span;
+                    };
+                    stats.append(metric('7d', a.weekly_remaining, a.weekly_will_exceed));
+                    stats.append(document.createTextNode(' · '));
+                    stats.append(metric('5h', a.session_remaining, a.session_will_exceed));
                     btn.append(label, stats);
                     bar.appendChild(btn);
                 }
