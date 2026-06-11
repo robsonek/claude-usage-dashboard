@@ -98,3 +98,39 @@ def test_get_default_account_id_first_active(db):
     b = _add(db, email='b@x.com')
     db.set_account_active(a, False)
     assert db.get_default_account_id() == b
+
+
+SNAP = lambda acc_id, pct: {
+    'account_id': acc_id, 'account_type': 'max', 'email': 'a@x.com',
+    'captured_at': '2026-06-11T07:00:00Z',
+    'quotas': [{'type': 'weekly', 'percent_remaining': pct,
+                'resets_at': '2026-06-15T11:00:00Z', 'time_remaining_seconds': 100}],
+}
+
+
+def test_insert_snapshot_persists_account_id(db):
+    acc = _add(db)
+    sid = db.insert_snapshot(SNAP(acc, 50))
+    row = db.conn.execute("SELECT account_id FROM snapshots WHERE id=?", (sid,)).fetchone()
+    assert row['account_id'] == acc
+
+
+def test_get_current_filters_by_account(db):
+    a = _add(db, email='a@x.com')
+    b = _add(db, email='b@x.com')
+    db.insert_snapshot(dict(SNAP(a, 11), email='a@x.com'))
+    db.insert_snapshot(dict(SNAP(b, 22), email='b@x.com'))
+    cur_a = db.get_current(account_id=a)
+    assert cur_a['limits']['weekly']['percent_remaining'] == 11
+    cur_b = db.get_current(account_id=b)
+    assert cur_b['limits']['weekly']['percent_remaining'] == 22
+
+
+def test_get_history_filters_by_account(db):
+    a = _add(db, email='a@x.com')
+    b = _add(db, email='b@x.com')
+    db.insert_snapshot(dict(SNAP(a, 11), email='a@x.com'))
+    db.insert_snapshot(dict(SNAP(b, 22), email='b@x.com'))
+    hist_a = db.get_history(account_id=a)
+    assert len(hist_a) == 1
+    assert hist_a[0]['limits']['weekly']['percent_remaining'] == 11

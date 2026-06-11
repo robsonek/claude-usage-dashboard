@@ -146,9 +146,10 @@ class UsageDatabase:
                 captured_at = datetime.now(timezone.utc)
 
         cursor.execute("""
-            INSERT INTO snapshots (captured_at, account_type, email)
-            VALUES (?, ?, ?)
-        """, (captured_at, data.get('account_type'), data.get('email')))
+            INSERT INTO snapshots (captured_at, account_type, email, account_id)
+            VALUES (?, ?, ?, ?)
+        """, (captured_at, data.get('account_type'), data.get('email'),
+              data.get('account_id')))
 
         snapshot_id = cursor.lastrowid
 
@@ -306,21 +307,27 @@ class UsageDatabase:
         row = cursor.fetchone()
         return self._parse_dt(row['resets_at']) if row else None
 
-    def get_current(self) -> Optional[Dict[str, Any]]:
+    def get_current(self, account_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Get the most recent usage snapshot.
+
+        Args:
+            account_id: If set, only consider snapshots belonging to this account.
 
         Returns:
             Dictionary with usage data in dashboard format, or None if no data
         """
         cursor = self.conn.cursor()
-
-        cursor.execute("""
+        where, params = "", ()
+        if account_id is not None:
+            where, params = "WHERE account_id = ?", (account_id,)
+        cursor.execute(f"""
             SELECT id, captured_at, account_type, email
             FROM snapshots
+            {where}
             ORDER BY captured_at DESC, id DESC
             LIMIT 1
-        """)
+        """, params)
 
         row = cursor.fetchone()
         if not row:
@@ -331,7 +338,8 @@ class UsageDatabase:
         return result
 
     def get_history(self, hours: Optional[int] = None,
-                    max_points: Optional[int] = None) -> List[Dict[str, Any]]:
+                    max_points: Optional[int] = None,
+                    account_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get historical usage data.
 
@@ -353,16 +361,19 @@ class UsageDatabase:
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
+        acct_sql = " AND account_id = ?" if account_id is not None else ""
+        acct_params = (account_id,) if account_id is not None else ()
+
         cursor = self.conn.cursor()
 
         # Default: filter the JOIN by captured_at (covering index) — unchanged path.
-        where, params = "s.captured_at >= ?", (cutoff,)
+        where, params = "s.captured_at >= ?" + acct_sql, (cutoff,) + acct_params
         if max_points and max_points >= 2:
             # Cheap id-only scan (covering index) tells us the count up front so we
             # can cap the expensive quota JOIN + dict build for long ranges.
             cursor.execute(
-                "SELECT id FROM snapshots WHERE captured_at >= ? "
-                "ORDER BY captured_at ASC, id ASC", (cutoff,))
+                "SELECT id FROM snapshots WHERE captured_at >= ?" + acct_sql +
+                " ORDER BY captured_at ASC, id ASC", (cutoff,) + acct_params)
             ids = [row['id'] for row in cursor.fetchall()]
             if len(ids) > max_points:
                 # Pick max_points indices evenly across [0, n-1], inclusive of both
