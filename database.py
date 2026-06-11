@@ -108,7 +108,7 @@ class UsageDatabase:
         Insert a new usage snapshot into the database.
 
         Args:
-            data: Dictionary with usage data from usage_fetcher.py
+            data: Dictionary with usage data from api_usage_fetcher.py
                   Expected keys: captured_at, account_type, email, quotas
 
         Returns:

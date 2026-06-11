@@ -16,12 +16,11 @@ from database import UsageDatabase
 def should_insert(data) -> bool:
     """Whether a fetched record is worth persisting.
 
-    Skip pure-error records AND empty-quota readings: a glitched PTY render of
-    `claude /usage` sometimes parses no quotas (only the terminal-init escape burst
-    was captured, or Claude itself showed "Could not refresh usage data"). Storing
-    those as a snapshot with zero quota rows adds nothing to the history charts and,
+    Skip pure-error records AND empty-quota readings (e.g. the API fetcher's
+    {"error": ...} output when the oauth/usage request fails). Storing those as
+    a snapshot with zero quota rows adds nothing to the history charts and,
     when it's the latest row, makes /api/current backfill *every* quota as stale
-    (↩ prev). The JSON backup + raw_debug dump are still written by collect_history.sh.
+    (↩ prev). The JSON backup is still written by collect_history.sh.
     """
     if 'error' in data:
         return False

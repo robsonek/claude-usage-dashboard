@@ -27,24 +27,15 @@ if ! flock -n 9; then
     exit 0
 fi
 
-# Fetch data: primary path is the oauth/usage HTTP API (api_usage_fetcher.py —
-# fast, structured, no PTY render glitches). Any non-zero exit / empty output
-# falls back to the PTY scraper (usage_fetcher.py), which also self-heals the
-# OAuth credentials via claude CLI. Both run under this script's flock, so the
-# two paths never race each other on the credentials file.
-# CLAUDE_USAGE_RAW_DIR: PTY fetcher dumps raw bytes here only for incomplete/
-# glitched readings, so we can diagnose what went wrong after the fact.
-export CLAUDE_USAGE_RAW_DIR="$DATA_DIR/raw_debug"
+# Fetch data from the oauth/usage HTTP API (api_usage_fetcher.py). On failure
+# it prints an {"error": ...} JSON and exits non-zero — the JSON is still
+# archived below for diagnosis (insert_to_db skips it) and the run exits 2 at
+# the very end so the timer/monitoring sees the failure.
 USAGE_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/api_usage_fetcher.py")
 FETCH_STATUS=$?
-if [ $FETCH_STATUS -ne 0 ] || [ -z "$USAGE_JSON" ]; then
-    log "WARN: API fetcher failed (exit $FETCH_STATUS), falling back to PTY claude /usage"
-    USAGE_JSON=$("$VENV_PYTHON" "$SCRIPT_DIR/usage_fetcher.py")
-    FETCH_STATUS=$?
-fi
 
-if [ $FETCH_STATUS -ne 0 ] || [ -z "$USAGE_JSON" ]; then
-    log "ERROR: usage_fetcher.py exited with $FETCH_STATUS, output=${#USAGE_JSON} bytes"
+if [ -z "$USAGE_JSON" ]; then
+    log "ERROR: api_usage_fetcher.py exited with $FETCH_STATUS and produced no output"
     exit 1
 fi
 

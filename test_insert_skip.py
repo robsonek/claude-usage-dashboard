@@ -6,7 +6,7 @@ refresh usage data"). insert_to_db used to persist those as a snapshot row with
 zero quota rows — useless for the history charts and, when it's the latest row,
 it makes /api/current backfill *every* quota as stale (↩ prev). should_insert()
 filters both pure-error records and empty-quota readings so they never reach the
-DB. The JSON backup + raw_debug dump are still written by collect_history.sh.
+DB. The JSON backup is still written by collect_history.sh.
 
 Run: python3 test_insert_skip.py
 """

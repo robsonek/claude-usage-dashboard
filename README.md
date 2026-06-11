@@ -175,8 +175,9 @@ containing `KEY=value` lines — no `export`, no quotes needed.
 | DASHBOARD_USERNAME | Login username | admin |
 | SESSION_COOKIE_SECURE | Set to `1` when served over HTTPS (Secure cookie) | 0 |
 | ALLOW_DEFAULT_CREDENTIALS | Set to `1` to allow built-in defaults (local dev only) | unset |
-| CLAUDE_BIN | Path to Claude CLI | claude |
-| RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and `data/raw_debug/` files are pruned daily (the dashboard only charts up to 1 month) | 60 |
+| CLAUDE_CREDENTIALS_FILE | Path to Claude CLI OAuth credentials | ~/.claude/.credentials.json |
+| CLAUDE_CONFIG_FILE | Path to Claude CLI config (account e-mail) | ~/.claude.json |
+| RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and legacy `data/raw_debug/` files are pruned daily (the dashboard only charts up to 1 month) | 60 |
 
 Generate a secure secret key with:
 
@@ -283,33 +284,35 @@ Without authentication, the dashboard will show empty quota data.
 Typical causes and how to diagnose:
 
 1. Claude CLI not authenticated on the server — run `claude` manually and
-   complete the OAuth flow.
-2. `claude` binary not in the cron job's PATH — verify the `PATH=...`
-   line in `crontab -l`.
-3. Claude CLI UI changed — affects only the PTY fallback. Since v1.1.0 the
-   primary fetch path is the oauth/usage HTTP API (`api_usage_fetcher.py`);
-   the PTY scraper runs only when the API path fails (look for
-   `WARN: API fetcher failed` in `cron.log`). Run either by hand:
+   complete the OAuth flow. The fetcher reads (and refreshes) the OAuth token
+   from `~/.claude/.credentials.json`; if the file is missing or the refresh
+   token was revoked, every fetch fails until you re-authenticate.
+2. Usage fetch failing — run the fetcher by hand and read its error:
 
    ```bash
    cd ~/claude-dashboard
-   venv/bin/python api_usage_fetcher.py            # primary (API)
-   DEBUG_USAGE_FETCHER=1 venv/bin/python usage_fetcher.py   # fallback (PTY)
+   venv/bin/python api_usage_fetcher.py
    ```
 
-   The collector (`collect_history.sh`) now also logs `WARN: empty quotas`
-   or `WARN: fetcher returned error: ...` straight into `cron.log` when
+   The collector (`collect_history.sh`) also logs
+   `WARN: fetcher returned error: ...` straight into `cron.log` when
    something goes wrong — check it first:
 
    ```bash
    tail -n 50 ~/claude-dashboard/cron.log
    ```
 
-   On a hard fetcher error the collector also **exits non-zero** (so a systemd
-   timer / monitoring sees the failure instead of a misleading success), and it
-   saves the raw PTY bytes + emulated text of any incomplete/glitched reading
-   under `data/raw_debug/` — inspect those to see exactly what the parser was
-   fed when a quota row goes missing after a Claude CLI update.
+   On a fetch error the collector still archives the `{"error": ...}` JSON
+   under `data/YYYY-MM-DD/` (skipped by the DB insert) and **exits non-zero**,
+   so a systemd timer / monitoring sees the failure instead of a misleading
+   success.
+3. Anthropic changed the (unofficial) oauth/usage endpoint — compare the raw
+   response with what `api_usage_fetcher.map_usage_response` expects:
+
+   ```bash
+   venv/bin/python -c "import api_usage_fetcher as a; \
+   c=a.load_credentials()['claudeAiOauth']; print(a._http_get_usage(c['accessToken']))"
+   ```
 
 ### `cron.log` grows indefinitely
 Add a logrotate rule at `/etc/logrotate.d/claude-dashboard`:

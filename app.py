@@ -25,7 +25,7 @@ app.config.update(
 
 # Fail closed: refuse to serve with the built-in default secret/password unless
 # explicitly allowed for local dev. This guard lives in the web app only — the
-# collector (which imports config for paths/CLAUDE_BIN) is unaffected.
+# collector (which imports config for paths) is unaffected.
 if (config.SECRET_KEY_IS_DEFAULT or config.PASSWORD_IS_DEFAULT) and \
         os.environ.get('ALLOW_DEFAULT_CREDENTIALS') != '1':
     raise RuntimeError(
