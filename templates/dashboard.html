@@ -137,20 +137,43 @@
         let currentAccount = localStorage.getItem('account_id') || null;
 
         async function loadAccountBar() {
-            const res = await fetch('/api/accounts');
-            const accounts = await res.json();
-            const active = accounts.filter(a => a.is_active);
-            const bar = document.getElementById('account-bar');
-            if (active.length <= 1) { bar.hidden = true; if (active[0]) currentAccount = String(active[0].id); return; }
-            if (!currentAccount || !active.some(a => String(a.id) === String(currentAccount)))
-                currentAccount = String(active[0].id);
-            bar.hidden = false;
-            bar.innerHTML = active.map(a => `
-                <button class="acc-mini ${String(a.id)===String(currentAccount)?'active':''}"
-                        onclick="switchAccount('${a.id}')">
-                    <span class="acc-mini-label">${a.label}</span>
-                    <span class="acc-mini-stats">7d ${a.weekly_remaining ?? '--'}% · 5h ${a.session_remaining ?? '--'}%</span>
-                </button>`).join('');
+            try {
+                const res = await fetch('/api/accounts');
+                const accounts = await res.json();
+                if (!Array.isArray(accounts)) return;   // e.g. session expired → login HTML
+                const active = accounts.filter(a => a.is_active);
+                const bar = document.getElementById('account-bar');
+                if (active.length <= 1) {
+                    bar.hidden = true;
+                    if (active[0]) {
+                        currentAccount = String(active[0].id);
+                        localStorage.setItem('account_id', currentAccount);
+                    }
+                    return;
+                }
+                // Correct a stale stored id (deleted/disabled account) before any fetch.
+                if (!currentAccount || !active.some(a => String(a.id) === String(currentAccount))) {
+                    currentAccount = String(active[0].id);
+                    localStorage.setItem('account_id', currentAccount);
+                }
+                bar.hidden = false;
+                bar.replaceChildren();
+                for (const a of active) {
+                    const btn = document.createElement('button');
+                    btn.className = 'acc-mini' + (String(a.id) === String(currentAccount) ? ' active' : '');
+                    btn.onclick = () => switchAccount(a.id);
+                    const label = document.createElement('span');
+                    label.className = 'acc-mini-label';
+                    label.textContent = a.label;                 // textContent = no HTML injection
+                    const stats = document.createElement('span');
+                    stats.className = 'acc-mini-stats';
+                    stats.textContent = `7d ${a.weekly_remaining ?? '--'}% · 5h ${a.session_remaining ?? '--'}%`;
+                    btn.append(label, stats);
+                    bar.appendChild(btn);
+                }
+            } catch (error) {
+                console.warn('Account bar load failed:', error);
+            }
         }
 
         function switchAccount(id) {
@@ -803,9 +826,11 @@
         }
 
         // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             initCharts();
-            loadAccountBar();
+            // Resolve (and correct) currentAccount before the first data fetch, so a
+            // stale localStorage id can't make /api/current?account=N 500 on first paint.
+            await loadAccountBar();
             forceRefresh();
 
             // Event-driven auto refresh: the heartbeat detects a new snapshot
