@@ -44,5 +44,6 @@ Thumbs.db
 .env.local
 CLAUDE.md
 
-# Internal audit reports (local only, reference file paths/line numbers)
-docs/audyt-*.md
+# Internal docs (superpowers plans/specs, audit reports) — kept local only, not
+# published to the public repo. Covers docs/audyt-*.md and docs/superpowers/.
+docs/

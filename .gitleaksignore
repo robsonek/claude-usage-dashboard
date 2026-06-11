@@ -1,0 +1,8 @@
+# Gitleaks allowlist of confirmed false positives (fingerprint = commit:path:rule:line).
+#
+# 6407ba0 .env.example line 40: the example `CLAUDE_OAUTH_CLIENT_ID=<uuid>` value
+# tripped the generic-api-key rule on entropy. It is NOT a secret — it's the public
+# Claude Code OAuth client id (also in api_usage_fetcher.py and shipped by
+# better-ccflare). The literal was removed from .env.example in a later commit;
+# this entry suppresses the finding that remains in that historical commit.
+6407ba0755cdd7d1784a0121f555579baa486d85:.env.example:generic-api-key:40
