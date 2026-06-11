@@ -177,6 +177,12 @@
                     const labelText = document.createElement('span');
                     labelText.textContent = a.label;             // textContent = no HTML injection
                     label.append(radio, labelText);
+                    if (a.account_type && a.account_type !== 'unknown') {
+                        const type = document.createElement('span');
+                        type.className = 'acc-mini-type';
+                        type.textContent = a.account_type;
+                        label.append(type);
+                    }
                     // Match the STATUS cards: show % USED (not remaining) and color
                     // each metric with the same logic — raw threshold, escalated to
                     // amber when the prediction forecasts an overage (will_exceed).
@@ -230,7 +236,14 @@
                         row.append(name, track, val, eta);
                         return row;
                     };
-                    btn.append(label,
+                    btn.append(label);
+                    if (a.email) {
+                        const email = document.createElement('span');
+                        email.className = 'acc-mini-email';
+                        email.textContent = a.email;
+                        btn.append(email);
+                    }
+                    btn.append(
                         meter('Weekly', a.weekly_remaining, a.weekly_will_exceed,
                               a.weekly_resets_at, a.weekly_period_start, 168),
                         meter('Session', a.session_remaining, a.session_will_exceed,
