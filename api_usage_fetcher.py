@@ -116,3 +116,67 @@ def needs_refresh(oauth: Dict[str, Any], now_ms: Optional[int] = None) -> bool:
     if now_ms is None:
         now_ms = int(time.time() * 1000)
     return now_ms >= expires_at - REFRESH_MARGIN_MS
+
+
+def _atomic_write_credentials(creds: Dict[str, Any]) -> None:
+    """Rewrite the credentials file atomically (tmp file + os.replace, mode 0600)."""
+    directory = os.path.dirname(CREDENTIALS_FILE) or '.'
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.credentials.')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(creds, f)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, CREDENTIALS_FILE)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def refresh_credentials(creds: Dict[str, Any],
+                        now_ms: Optional[int] = None) -> Dict[str, Any]:
+    """Refresh the OAuth access token and persist rotated tokens back to disk.
+
+    On any failure nothing is written — the caller exits non-zero and the PTY
+    fallback (claude CLI) refreshes its own credentials as before.
+    """
+    oauth = creds['claudeAiOauth']
+    refresh_token = oauth.get('refreshToken')
+    if not refresh_token:
+        raise UsageApiError('no refreshToken in credentials file')
+
+    body = json.dumps({
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+        'client_id': CLIENT_ID,
+    }).encode()
+    req = urllib.request.Request(TOKEN_URL, data=body, method='POST', headers={
+        'Content-Type': 'application/json',
+        'User-Agent': f'claude-code/{CLI_VERSION}',
+    })
+    try:
+        with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            token = json.loads(resp.read().decode())
+    except Exception as e:
+        # Never include the request/response payload here: it carries tokens.
+        raise UsageApiError(f'token refresh failed: {type(e).__name__}: {e}') from e
+
+    access_token = token.get('access_token')
+    if not access_token:
+        raise UsageApiError('token refresh response has no access_token')
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+
+    oauth['accessToken'] = access_token
+    if token.get('refresh_token'):
+        oauth['refreshToken'] = token['refresh_token']
+    if isinstance(token.get('expires_in'), (int, float)):
+        oauth['expiresAt'] = int(now_ms + token['expires_in'] * 1000)
+
+    try:
+        _atomic_write_credentials(creds)
+    except OSError as e:
+        raise UsageApiError(f'cannot write credentials file: {e}') from e
+    return oauth

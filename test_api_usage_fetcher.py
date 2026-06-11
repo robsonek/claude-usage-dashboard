@@ -4,6 +4,8 @@ All offline — HTTP is monkeypatched via api_usage_fetcher._urlopen.
 """
 import json
 import os
+import time
+import urllib.error
 from datetime import datetime, timezone
 
 import pytest
@@ -133,3 +135,62 @@ def test_needs_refresh_true_within_margin_and_when_missing():
     near = 1780000000000 - 60_000  # 60s left < 120s margin
     assert auf.needs_refresh(CREDS['claudeAiOauth'], now_ms=near) is True
     assert auf.needs_refresh({'accessToken': 'x'}, now_ms=0) is True
+
+
+# ---- token refresh + atomic write-back ----
+
+class FakeResponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status = status
+
+    def read(self):
+        return json.dumps(self._payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_refresh_updates_tokens_and_preserves_other_fields(creds_file, monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured['url'] = req.full_url
+        captured['body'] = json.loads(req.data.decode())
+        return FakeResponse({'access_token': 'sk-ant-oat01-NEW',
+                             'refresh_token': 'sk-ant-ort01-NEW',
+                             'expires_in': 28800})
+
+    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
+    creds = auf.load_credentials()
+    oauth = auf.refresh_credentials(creds, now_ms=1_000_000)
+
+    assert captured['url'] == auf.TOKEN_URL
+    assert captured['body']['grant_type'] == 'refresh_token'
+    assert captured['body']['refresh_token'] == 'sk-ant-ort01-BBB'
+    assert captured['body']['client_id'] == auf.CLIENT_ID
+
+    assert oauth['accessToken'] == 'sk-ant-oat01-NEW'
+    on_disk = json.loads(creds_file.read_text())
+    assert on_disk['claudeAiOauth']['accessToken'] == 'sk-ant-oat01-NEW'
+    assert on_disk['claudeAiOauth']['refreshToken'] == 'sk-ant-ort01-NEW'
+    assert on_disk['claudeAiOauth']['expiresAt'] == 1_000_000 + 28800 * 1000
+    # untouched fields survive the rewrite
+    assert on_disk['someOtherTopLevelKey'] == {'keep': 'me'}
+    assert on_disk['claudeAiOauth']['subscriptionType'] == 'max'
+    assert oct(os.stat(creds_file).st_mode & 0o777) == oct(0o600)
+
+
+def test_refresh_failure_raises_and_leaves_file_untouched(creds_file, monkeypatch):
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 400, 'Bad Request', None, None)
+
+    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
+    creds = auf.load_credentials()
+    before = creds_file.read_text()
+    with pytest.raises(auf.UsageApiError):
+        auf.refresh_credentials(creds)
+    assert creds_file.read_text() == before
