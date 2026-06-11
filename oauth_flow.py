@@ -13,13 +13,14 @@ import time
 import urllib.request
 from urllib.parse import urlencode
 
-from api_usage_fetcher import CLIENT_ID, TOKEN_URL, CLI_VERSION
+from api_usage_fetcher import CLIENT_ID, TOKEN_URL, CLI_VERSION, TOKEN_ENDPOINT_UA
 
-# Mirror the working better-ccflare reference exactly. The 429 at the token
-# endpoint was NOT caused by this host (ccflare uses claude.ai and works) — it
-# came from spoofing `User-Agent: claude-code/...` on the token POST, which
-# Anthropic's anti-abuse flags. So: keep claude.ai here, and send NO User-Agent
-# on the token exchange (see exchange_code).
+# Mirror the working better-ccflare reference exactly. The token endpoint sits
+# behind Cloudflare: spoofing `claude-code/<ver>` → 429 (anti-abuse), urllib's
+# default `Python-urllib` → 403 (edge block). ccflare works because Bun sends
+# `Bun/<ver>` — so we send TOKEN_ENDPOINT_UA on the exchange. Authorize host
+# stays claude.ai (ccflare uses it and works; the db6645f claude.com/cai switch
+# was a misdiagnosis).
 AUTHORIZE_URL = 'https://claude.ai/oauth/authorize'
 REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback'
 PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
@@ -74,11 +75,11 @@ def exchange_code(code_input: str, verifier: str, now_ms=None) -> dict:
         'redirect_uri': REDIRECT_URI,
         'client_id': CLIENT_ID,
     }).encode()
-    # NO User-Agent: claiming to be claude-code/<ver> on the token endpoint
-    # without matching the real CLI fingerprint trips anti-abuse → 429.
-    # better-ccflare sends only Content-Type here and works.
+    # Token endpoint UA must be neither the spoofed `claude-code/<ver>` (429) nor
+    # urllib's default `Python-urllib` (Cloudflare 403). Use Bun's UA like ccflare.
     req = urllib.request.Request(TOKEN_URL, data=body, method='POST', headers={
         'Content-Type': 'application/json',
+        'User-Agent': TOKEN_ENDPOINT_UA,
     })
     try:
         with _urlopen(req, timeout=15) as resp:
@@ -110,10 +111,16 @@ def fetch_profile(access_token: str) -> dict:
     except Exception as e:
         raise OAuthError(f'profile fetch failed: {type(e).__name__}: {e}') from e
     account = data.get('account') or {}
+    org = data.get('organization') or {}
+    # Individual plans surface as account-level flags; Team/Enterprise only show
+    # up as organization.organization_type (e.g. "claude_team") with both flags
+    # False. Derive from the org type as a fallback so Team isn't "unknown".
     if account.get('has_claude_max'):
         account_type = 'max'
     elif account.get('has_claude_pro'):
         account_type = 'pro'
     else:
-        account_type = 'unknown'
+        org_type = org.get('organization_type') or ''
+        account_type = (org_type[len('claude_'):] if org_type.startswith('claude_')
+                        else org_type) or 'unknown'
     return {'email': account.get('email'), 'account_type': account_type}

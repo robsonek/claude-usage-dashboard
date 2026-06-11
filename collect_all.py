@@ -40,17 +40,37 @@ def _write_backup(snapshot, account_id):
         _log(f'WARN: backup write failed for account {account_id}: {e}')
 
 
+def _refresh(db, account):
+    """Refresh this account's token and persist it; return the new access token."""
+    new = auf.refresh_access_token(account['refresh_token'])
+    db.update_account_tokens(account['id'], new['access_token'],
+                             new['refresh_token'], new['expires_at'])
+    # Keep the in-memory dict consistent in case we refresh again this run.
+    account['refresh_token'] = new['refresh_token']
+    account['expires_at'] = new['expires_at']
+    return new['access_token']
+
+
 def _poll_one(db, account) -> bool:
-    """Refresh-if-needed, fetch usage, insert snapshot. Returns True on success."""
+    """Refresh-if-needed, fetch usage, insert snapshot. Returns True on success.
+
+    Refreshes proactively when the token is near expiry, and reactively once on a
+    401 (token invalidated before its nominal expiry — e.g. rotated elsewhere).
+    """
     acc_id = account['id']
     try:
         access_token = account['access_token']
         if auf.needs_refresh_ms(account['expires_at']):
-            new = auf.refresh_access_token(account['refresh_token'])
-            db.update_account_tokens(acc_id, new['access_token'],
-                                     new['refresh_token'], new['expires_at'])
-            access_token = new['access_token']
-        api = auf._http_get_usage(access_token)
+            access_token = _refresh(db, account)
+        try:
+            api = auf._http_get_usage(access_token)
+        except auf.UsageApiError as e:
+            if e.status != 401:
+                raise
+            # Dead access token despite a future expiry — refresh and retry once.
+            _log(f'account {acc_id} got 401; refreshing token and retrying')
+            access_token = _refresh(db, account)
+            api = auf._http_get_usage(access_token)
         snapshot = auf.build_snapshot(api, account)
         db.insert_snapshot(snapshot)
         _write_backup(snapshot, acc_id)

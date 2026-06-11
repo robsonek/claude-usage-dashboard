@@ -55,6 +55,29 @@ def test_refreshes_expired_token_and_persists(db, tmp_path, monkeypatch):
     assert p['access_token'] == 'AT2' and p['refresh_token'] == 'RT2'
 
 
+def test_401_triggers_refresh_and_retry(db, tmp_path, monkeypatch):
+    far = 9_999_999_999_999
+    _add(db, 'a@x.com', far)  # far expiry → no proactive refresh
+    calls = {'usage': 0}
+
+    def usage(token):
+        calls['usage'] += 1
+        if calls['usage'] == 1:
+            raise collect_all.auf.UsageApiError(
+                'usage request failed: HTTPError: HTTP Error 401: Unauthorized', status=401)
+        return PROD_SAMPLE
+
+    monkeypatch.setattr(collect_all.auf, '_http_get_usage', usage)
+    monkeypatch.setattr(collect_all.auf, 'refresh_access_token',
+                        lambda rt, now_ms=None: {'access_token': 'AT2',
+                            'refresh_token': 'RT2', 'expires_at': far})
+    monkeypatch.setattr(collect_all, 'DATA_DIR', str(tmp_path / 'data'))
+    rc = collect_all.run(db)
+    assert rc == 0
+    assert calls['usage'] == 2  # retried once after refreshing
+    assert db.get_pollable_accounts()[0]['access_token'] == 'AT2'  # rotated token persisted
+
+
 def test_one_account_failing_does_not_block_others(db, tmp_path, monkeypatch):
     far = 9_999_999_999_999
     a = _add(db, 'a@x.com', far)

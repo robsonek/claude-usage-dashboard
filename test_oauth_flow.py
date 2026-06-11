@@ -91,6 +91,18 @@ def test_fetch_profile_pro_and_unknown(monkeypatch):
     assert of.fetch_profile('AT')['account_type'] == 'unknown'
 
 
+def test_fetch_profile_team_from_organization(monkeypatch):
+    # Team/Enterprise: both account flags False, plan only in organization_type.
+    monkeypatch.setattr(of, '_urlopen', lambda req, timeout=None: FakeResponse(
+        {'account': {'email': 't@x.com', 'has_claude_max': False, 'has_claude_pro': False},
+         'organization': {'organization_type': 'claude_team'}}))
+    assert of.fetch_profile('AT')['account_type'] == 'team'
+    monkeypatch.setattr(of, '_urlopen', lambda req, timeout=None: FakeResponse(
+        {'account': {'email': 'e@x.com', 'has_claude_max': False, 'has_claude_pro': False},
+         'organization': {'organization_type': 'claude_enterprise'}}))
+    assert of.fetch_profile('AT')['account_type'] == 'enterprise'
+
+
 def test_exchange_code_missing_tokens_raises(monkeypatch):
     monkeypatch.setattr(of, '_urlopen',
                         lambda req, timeout=None: FakeResponse({'access_token': 'AT'}))  # no refresh_token

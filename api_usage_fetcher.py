@@ -12,6 +12,7 @@ Method modeled on better-ccflare (packages/providers/src/usage-fetcher.ts).
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,11 @@ CLIENT_ID = os.environ.get('CLAUDE_OAUTH_CLIENT_ID',
                            '9d1c250a-e61b-44d9-88ed-5944d1962f5e')
 # Only used for the User-Agent header; keep loosely in sync with the CLI.
 CLI_VERSION = os.environ.get('CLAUDE_CLI_VERSION', '2.1.169')
+# User-Agent for the token endpoint (platform.claude.com/v1/oauth/token). It is
+# fronted by Cloudflare with two traps: spoofing `claude-code/<ver>` trips
+# anti-abuse (429), and urllib's default `Python-urllib/<ver>` is blocked at the
+# edge (403). better-ccflare works because Bun sends `Bun/<ver>` — mirror that.
+TOKEN_ENDPOINT_UA = os.environ.get('TOKEN_ENDPOINT_UA', 'Bun/1.1.34')
 HTTP_TIMEOUT = 15
 REFRESH_MARGIN_MS = 120_000  # refresh when less than 2 min of token life left
 
@@ -40,7 +46,16 @@ WINDOW_MAP = [
 
 
 class UsageApiError(Exception):
-    """Any failure of the API fetch path (caller records it per account)."""
+    """Any failure of the API fetch path (caller records it per account).
+
+    `status` carries the HTTP status code when the failure was an HTTP error
+    (e.g. 401 = dead/invalid access token → caller can refresh and retry),
+    else None.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def map_usage_response(api: Dict[str, Any],
@@ -107,12 +122,11 @@ def refresh_access_token(refresh_token: str, now_ms=None) -> Dict[str, Any]:
         'refresh_token': refresh_token,
         'client_id': CLIENT_ID,
     }).encode()
-    # NO User-Agent here: the token endpoint (platform.claude.com/v1/oauth/token)
-    # 429-flags requests that spoof `claude-code/<ver>` without the real CLI
-    # fingerprint. better-ccflare sends only Content-Type on this POST and works.
-    # (The usage endpoint below DOES accept the UA — keep it there.)
+    # Token endpoint UA must be neither the spoofed `claude-code/<ver>` (429) nor
+    # urllib's default `Python-urllib` (Cloudflare 403). Use Bun's UA like ccflare.
     req = urllib.request.Request(TOKEN_URL, data=body, method='POST', headers={
         'Content-Type': 'application/json',
+        'User-Agent': TOKEN_ENDPOINT_UA,
     })
     try:
         with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
@@ -160,5 +174,10 @@ def _http_get_usage(access_token: str) -> Dict[str, Any]:
     try:
         with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        # Carry the status so the caller can react (401 = dead token → refresh+retry).
+        raise UsageApiError(
+            f'usage request failed: HTTPError: HTTP Error {e.code}: {e.reason}',
+            status=e.code) from e
     except Exception as e:
         raise UsageApiError(f'usage request failed: {type(e).__name__}: {e}') from e
