@@ -94,3 +94,25 @@ def map_usage_response(api: Dict[str, Any],
         quotas.append(quota)
 
     return quotas
+
+
+def load_credentials() -> Dict[str, Any]:
+    """Read the whole credentials file (all top-level keys preserved for write-back)."""
+    try:
+        with open(CREDENTIALS_FILE, encoding='utf-8') as f:
+            creds = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise UsageApiError(f'cannot read credentials file: {e}') from e
+    oauth = creds.get('claudeAiOauth')
+    if not isinstance(oauth, dict) or not oauth.get('accessToken'):
+        raise UsageApiError('credentials file has no claudeAiOauth.accessToken')
+    return creds
+
+
+def needs_refresh(oauth: Dict[str, Any], now_ms: Optional[int] = None) -> bool:
+    expires_at = oauth.get('expiresAt')
+    if not isinstance(expires_at, (int, float)):
+        return True
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    return now_ms >= expires_at - REFRESH_MARGIN_MS

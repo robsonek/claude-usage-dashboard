@@ -88,3 +88,48 @@ def test_reset_in_past_clamps_time_remaining_to_zero():
     quotas = auf.map_usage_response(sample, now=NOW)
     session = next(q for q in quotas if q['type'] == 'session')
     assert session['time_remaining_seconds'] == 0
+
+
+# ---- credentials & refresh decision ----
+
+CREDS = {
+    "claudeAiOauth": {
+        "accessToken": "sk-ant-oat01-AAA",
+        "refreshToken": "sk-ant-ort01-BBB",
+        "expiresAt": 1780000000000,
+        "scopes": ["user:inference", "user:profile"],
+        "subscriptionType": "max",
+        "rateLimitTier": "default",
+    },
+    "someOtherTopLevelKey": {"keep": "me"},
+}
+
+
+@pytest.fixture
+def creds_file(tmp_path, monkeypatch):
+    path = tmp_path / '.credentials.json'
+    path.write_text(json.dumps(CREDS))
+    monkeypatch.setattr(auf, 'CREDENTIALS_FILE', str(path))
+    return path
+
+
+def test_load_credentials_reads_oauth_section(creds_file):
+    creds = auf.load_credentials()
+    assert creds['claudeAiOauth']['accessToken'] == 'sk-ant-oat01-AAA'
+
+
+def test_load_credentials_missing_file_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(auf, 'CREDENTIALS_FILE', str(tmp_path / 'nope.json'))
+    with pytest.raises(auf.UsageApiError):
+        auf.load_credentials()
+
+
+def test_needs_refresh_false_for_fresh_token():
+    now_ms = 1780000000000 - 3_600_000  # an hour before expiry
+    assert auf.needs_refresh(CREDS['claudeAiOauth'], now_ms=now_ms) is False
+
+
+def test_needs_refresh_true_within_margin_and_when_missing():
+    near = 1780000000000 - 60_000  # 60s left < 120s margin
+    assert auf.needs_refresh(CREDS['claudeAiOauth'], now_ms=near) is True
+    assert auf.needs_refresh({'accessToken': 'x'}, now_ms=0) is True
