@@ -231,10 +231,12 @@
                         return row;
                     };
                     btn.append(label,
-                        meter('7d', a.weekly_remaining, a.weekly_will_exceed,
+                        meter('Weekly', a.weekly_remaining, a.weekly_will_exceed,
                               a.weekly_resets_at, a.weekly_period_start, 168),
-                        meter('5h', a.session_remaining, a.session_will_exceed,
-                              a.session_resets_at, a.session_period_start, 5));
+                        meter('Session', a.session_remaining, a.session_will_exceed,
+                              a.session_resets_at, a.session_period_start, 5),
+                        meter('Sonnet', a.model_remaining, a.model_will_exceed,
+                              a.model_resets_at, a.model_period_start, 168));
                     bar.appendChild(btn);
                 }
             } catch (error) {
