@@ -167,6 +167,9 @@ The app reads configuration from environment variables. It does **not** parse
 file (`EnvironmentFile=/home/YOUR_USERNAME/claude-dashboard/.env`, see step 4)
 containing `KEY=value` lines — no `export`, no quotes needed.
 
+Copy [`.env.example`](.env.example) to `.env` as a starting point and fill in real
+values (`cp .env.example .env`); the table below documents every variable.
+
 > **Fail-closed:** the dashboard refuses to start unless **both**
 > `FLASK_SECRET_KEY` and `DASHBOARD_PASSWORD` are set — otherwise it would run on
 > the built-in defaults and anyone could forge a logged-in session. For a throwaway
