@@ -154,20 +154,50 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
   .chart-container canvas{height:190px!important}
 }
 
-.account-bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
-.acc-mini { background: #0c1518; border: 1px solid #16323a; border-radius: 8px;
-    padding: 6px 12px; color: #6fe3d2; cursor: pointer; text-align: left;
-    display: flex; flex-direction: column; min-width: 120px; }
-.acc-mini.active { border-color: #2de0c6; box-shadow: 0 0 0 1px #2de0c6 inset; }
-.acc-mini-label { font-weight: 600; font-size: 0.9rem; }
-.acc-mini-stats { font-size: 0.72rem; color: #4f8c84; }
-.account-row { display: flex; gap: 12px; align-items: center; padding: 8px 0;
-    border-bottom: 1px solid #16323a; font-size: 0.9rem; }
-.acc-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-.acc-dot.on { background: #2de0c6; } .acc-dot.off { background: #555; }
-.acc-email { color: #4f8c84; } .acc-error { color: #e36f6f; font-size: 0.75rem; }
-.acc-actions { margin-left: auto; display: flex; gap: 6px; }
-.acc-actions button, .add-account button { background: #0c1518; color: #6fe3d2;
-    border: 1px solid #16323a; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-.add-account { margin-top: 24px; } .add-account input { margin: 4px 6px 4px 0;
-    background: #0c1518; border: 1px solid #16323a; color: #cfeee8; padding: 6px; border-radius: 6px; }
+/* Account bar on the dashboard (mini-card per account; hidden when ≤1 active) */
+.account-bar{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 22px}
+.acc-mini{font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:9px 14px;color:var(--mid);cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:3px;min-width:150px;transition:all .15s}
+.acc-mini:hover{border-color:var(--accent-border);color:var(--accent)}
+.acc-mini.active{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent)}
+.acc-mini-label{font-weight:600;font-size:.8rem;letter-spacing:.02em}
+.acc-mini-stats{font-size:.66rem;color:var(--label)}
+.acc-mini.active .acc-mini-stats{color:var(--mid)}
+
+/* Accounts page (/accounts) */
+.accounts-page .accounts-panel{background:var(--panel);border-radius:9px;padding:6px 16px;margin-bottom:26px}
+.account-row{display:flex;gap:14px;align-items:center;padding:13px 0;border-bottom:1px solid var(--border);font-size:.88rem}
+.account-row:last-child{border-bottom:none}
+.acc-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.acc-dot.on{background:var(--ok);box-shadow:0 0 7px var(--ok)}
+.acc-dot.off{background:var(--label)}
+.acc-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.acc-label{font-weight:600;color:var(--text)}
+.acc-email{font-family:var(--mono);font-size:.72rem;color:var(--label);overflow:hidden;text-overflow:ellipsis}
+.acc-type{font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-border);padding:3px 9px;border-radius:6px}
+.acc-error{font-family:var(--mono);font-size:.7rem;color:var(--warn);cursor:help}
+.acc-empty{color:var(--label);font-family:var(--mono);font-size:.8rem;padding:14px 0}
+.acc-actions{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
+.acc-actions button{font-family:var(--mono);font-size:.72rem;padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--mid);cursor:pointer;transition:all .15s}
+.acc-actions button:hover{border-color:var(--accent-border);color:var(--accent)}
+.acc-actions button.danger:hover{border-color:rgba(244,63,94,.4);color:var(--crit)}
+
+/* Add-account flow */
+.add-account{padding:16px}
+.add-step{display:flex;gap:14px;padding:10px 0}
+.add-step[hidden]{display:none}
+.step-no{font-family:var(--mono);font-weight:700;font-size:.78rem;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-border);width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none}
+.step-body{display:flex;flex-direction:column;gap:10px;min-width:0;flex:1}
+.step-body p{color:var(--mid);font-size:.85rem}
+.btn-accent{font-family:var(--mono);align-self:flex-start;padding:8px 16px;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s;color:var(--accent);border:1px solid var(--accent-border);background:var(--accent-soft)}
+.btn-accent:hover{background:rgba(34,211,238,.18)}
+.auth-link{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent-border)}
+.auth-link:hover{border-bottom-style:solid}
+.add-form{display:flex;gap:8px;flex-wrap:wrap}
+.add-form input{flex:1 1 220px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);font-family:var(--mono);font-size:.8rem}
+.add-form input:focus{outline:none;border-color:var(--accent)}
+.add-msg{font-family:var(--mono);font-size:.78rem;color:var(--mid);padding:4px 0 8px;min-height:1.2em}
+
+@media(max-width:600px){
+  .account-row{flex-wrap:wrap}
+  .acc-actions{margin-left:0;width:100%}
+}

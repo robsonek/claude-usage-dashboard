@@ -7,20 +7,25 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<div class="container">
+<div class="dashboard accounts-page">
     <header>
-        <h1>Konta <span class="version-badge">v{{ version }}</span></h1>
-        <a href="{{ url_for('dashboard') }}" class="btn-refresh">← Dashboard</a>
+        <h1>Konta <span class="version-badge" title="App version">v{{ version }}</span></h1>
+        <div class="header-actions">
+            <a href="{{ url_for('dashboard') }}" class="btn-refresh">← Dashboard</a>
+        </div>
     </header>
 
-    <section class="accounts-list" id="accounts-list">
+    <p class="section-label">Połączone konta</p>
+    <section class="accounts-panel" id="accounts-list">
         {% for a in accounts %}
         <div class="account-row" data-id="{{ a.id }}">
             <span class="acc-dot {{ 'on' if a.is_active else 'off' }}"></span>
-            <span class="acc-label">{{ a.label }}</span>
-            <span class="acc-email">{{ a.email or '—' }}</span>
+            <div class="acc-id">
+                <span class="acc-label">{{ a.label }}</span>
+                <span class="acc-email">{{ a.email or '—' }}</span>
+            </div>
             <span class="acc-type">{{ a.account_type or '?' }}</span>
-            <span class="acc-error">{{ a.last_error or '' }}</span>
+            {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ błąd odczytu</span>{% endif %}
             <span class="acc-actions">
                 {% if a.is_active %}
                 <button onclick="op({{ a.id }}, 'disable')">Wyłącz</button>
@@ -28,25 +33,36 @@
                 <button onclick="op({{ a.id }}, 'enable')">Włącz</button>
                 {% endif %}
                 <button onclick="renameAcc({{ a.id }})">Zmień nazwę</button>
-                <button onclick="delAcc({{ a.id }})">Usuń</button>
+                <button class="danger" onclick="delAcc({{ a.id }})">Usuń</button>
             </span>
         </div>
         {% else %}
-        <p class="muted">Brak kont. Dodaj pierwsze konto poniżej.</p>
+        <p class="acc-empty">Brak kont — dodaj pierwsze konto poniżej.</p>
         {% endfor %}
     </section>
 
-    <section class="add-account">
-        <h2>Dodaj konto</h2>
-        <button id="start-btn" onclick="startOAuth()">1. Rozpocznij autoryzację</button>
-        <div id="oauth-step2" hidden>
-            <p>Otwórz link, zaloguj się na wybrane konto Claude i wklej kod:</p>
-            <p><a id="auth-link" href="#" target="_blank" rel="noopener">Otwórz stronę autoryzacji ↗</a></p>
-            <input id="code-input" type="text" placeholder="wklej kod#state" size="60">
-            <input id="label-input" type="text" placeholder="nazwa (opcjonalnie)">
-            <button onclick="completeOAuth()">2. Dodaj konto</button>
+    <p class="section-label">Dodaj konto</p>
+    <section class="accounts-panel add-account">
+        <div class="add-step">
+            <span class="step-no">1</span>
+            <div class="step-body">
+                <p>Wygeneruj link autoryzacji i zaloguj się na wybrane konto Claude.</p>
+                <button id="start-btn" class="btn-accent" onclick="startOAuth()">Rozpocznij autoryzację</button>
+                <a id="auth-link" class="auth-link" href="#" target="_blank" rel="noopener" hidden>Otwórz stronę autoryzacji ↗</a>
+            </div>
         </div>
-        <p id="add-msg" class="muted"></p>
+        <div class="add-step" id="oauth-step2" hidden>
+            <span class="step-no">2</span>
+            <div class="step-body">
+                <p>Skopiuj wyświetlony kod i wklej go tutaj:</p>
+                <div class="add-form">
+                    <input id="code-input" type="text" placeholder="wklej kod#state" autocomplete="off">
+                    <input id="label-input" type="text" placeholder="nazwa (opcjonalnie)">
+                    <button class="btn-accent" onclick="completeOAuth()">Dodaj konto</button>
+                </div>
+            </div>
+        </div>
+        <p id="add-msg" class="add-msg" role="status"></p>
     </section>
 </div>
 <script>
@@ -55,7 +71,12 @@ async function startOAuth() {
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
         body:'action=start'});
     const d = await r.json();
-    document.getElementById('auth-link').href = d.authorize_url;
+    const msg = document.getElementById('add-msg');
+    if (!r.ok) { msg.textContent = 'Błąd: ' + (d.error || r.status); return; }
+    msg.textContent = '';
+    const link = document.getElementById('auth-link');
+    link.href = d.authorize_url;
+    link.hidden = false;
     document.getElementById('oauth-step2').hidden = false;
 }
 async function completeOAuth() {
