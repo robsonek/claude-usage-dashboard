@@ -15,20 +15,22 @@
 <body>
     <div class="dashboard">
         <header>
-            <h1>Claude Usage Dashboard</h1>
+            <h1>Claude Usage Dashboard <span class="version-badge" title="App version">v{{ version }}</span></h1>
             <div class="header-actions">
-                <span class="version-badge" title="App version">v{{ version }}</span>
                 <span class="freshness" id="freshness" title="Age of last snapshot">
                     <span class="fresh-dot" id="fresh-dot"></span>
                     <span id="fresh-text">--</span>
                 </span>
-                <button id="refresh-btn" class="btn-refresh">↻ Refresh</button>
+                <button id="refresh-btn" class="btn-refresh">Refresh</button>
                 <a href="{{ url_for('accounts_page') }}" class="btn-refresh" title="Manage accounts">Accounts</a>
                 <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
             </div>
         </header>
 
-        <div class="account-bar" id="account-bar" hidden></div>
+        <div id="account-section" hidden>
+            <div class="section-label">Accounts <span class="label-hint">· click to switch</span></div>
+            <div class="account-bar" id="account-bar"></div>
+        </div>
 
         <!-- Current status cards -->
         <div class="section-label">Status</div>
@@ -146,8 +148,9 @@
                 if (!Array.isArray(accounts)) return;   // e.g. session expired → login HTML
                 const active = accounts.filter(a => a.is_active);
                 const bar = document.getElementById('account-bar');
+                const section = document.getElementById('account-section');
                 if (active.length <= 1) {
-                    bar.hidden = true;
+                    section.hidden = true;
                     if (active[0]) {
                         currentAccount = String(active[0].id);
                         localStorage.setItem('account_id', currentAccount);
@@ -159,34 +162,79 @@
                     currentAccount = String(active[0].id);
                     localStorage.setItem('account_id', currentAccount);
                 }
-                bar.hidden = false;
+                section.hidden = false;
                 bar.replaceChildren();
                 for (const a of active) {
                     const btn = document.createElement('button');
                     btn.className = 'acc-mini' + (String(a.id) === String(currentAccount) ? ' active' : '');
                     btn.onclick = () => switchAccount(a.id);
+                    // Radio-style dot signals these are selectable buttons, not
+                    // just meters; the active account gets a filled accent dot.
                     const label = document.createElement('span');
                     label.className = 'acc-mini-label';
-                    label.textContent = a.label;                 // textContent = no HTML injection
-                    const stats = document.createElement('span');
-                    stats.className = 'acc-mini-stats';
+                    const radio = document.createElement('span');
+                    radio.className = 'acc-mini-radio';
+                    const labelText = document.createElement('span');
+                    labelText.textContent = a.label;             // textContent = no HTML injection
+                    label.append(radio, labelText);
                     // Match the STATUS cards: show % USED (not remaining) and color
                     // each metric with the same logic — raw threshold, escalated to
                     // amber when the prediction forecasts an overage (will_exceed).
-                    const metric = (lbl, remaining, willExceed) => {
-                        const span = document.createElement('span');
-                        if (remaining == null) { span.textContent = `${lbl} --%`; return span; }
-                        const used = Math.round(100 - remaining);
-                        span.textContent = `${lbl} ${used}%`;
-                        let cls = getProgressClass(used);
-                        if (willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
-                        span.className = cls;   // ok | warning | critical
-                        return span;
+                    const meter = (lbl, remaining, willExceed, resetsAt, periodStart, periodHours) => {
+                        const row = document.createElement('span');
+                        row.className = 'acc-mini-meter';
+                        const name = document.createElement('span');
+                        name.className = 'm-lbl';
+                        name.textContent = lbl;
+                        const track = document.createElement('span');
+                        track.className = 'acc-mini-bar';
+                        const fill = document.createElement('span');
+                        fill.className = 'acc-mini-fill';
+                        const val = document.createElement('span');
+                        val.className = 'm-val';
+                        if (remaining == null) {
+                            val.textContent = '--%';
+                        } else {
+                            const used = Math.round(100 - remaining);
+                            let cls = getProgressClass(used);
+                            if (willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
+                            fill.classList.add(cls);
+                            val.classList.add(cls);
+                            fill.style.width = Math.min(used, 100) + '%';
+                            val.textContent = `${used}%`;
+                        }
+                        // Time left in the current window, from the same quota row
+                        // the percentage came from (dim, so the % stays the focus).
+                        const eta = document.createElement('span');
+                        eta.className = 'm-eta';
+                        if (resetsAt) {
+                            const hrs = (new Date(resetsAt) - Date.now()) / 3600000;
+                            eta.textContent = formatHours(hrs);
+                        }
+                        track.append(fill);
+                        // Target tick: where the bar SHOULD be right now at an even
+                        // burn rate (mirrors the charts' amber Target line).
+                        if (resetsAt) {
+                            const reset = new Date(resetsAt).getTime();
+                            const start = periodStart
+                                ? new Date(periodStart).getTime()
+                                : reset - periodHours * 3600000;
+                            const frac = (Date.now() - start) / (reset - start);
+                            if (isFinite(frac)) {
+                                const tick = document.createElement('span');
+                                tick.className = 'acc-mini-tick';
+                                tick.style.left = (Math.max(0, Math.min(1, frac)) * 100) + '%';
+                                track.append(tick);
+                            }
+                        }
+                        row.append(name, track, val, eta);
+                        return row;
                     };
-                    stats.append(metric('7d', a.weekly_remaining, a.weekly_will_exceed));
-                    stats.append(document.createTextNode(' · '));
-                    stats.append(metric('5h', a.session_remaining, a.session_will_exceed));
-                    btn.append(label, stats);
+                    btn.append(label,
+                        meter('7d', a.weekly_remaining, a.weekly_will_exceed,
+                              a.weekly_resets_at, a.weekly_period_start, 168),
+                        meter('5h', a.session_remaining, a.session_will_exceed,
+                              a.session_resets_at, a.session_period_start, 5));
                     bar.appendChild(btn);
                 }
             } catch (error) {
