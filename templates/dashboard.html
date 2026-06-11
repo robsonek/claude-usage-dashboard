@@ -236,14 +236,7 @@
                         row.append(name, track, val, eta);
                         return row;
                     };
-                    btn.append(label);
-                    if (a.email) {
-                        const email = document.createElement('span');
-                        email.className = 'acc-mini-email';
-                        email.textContent = a.email;
-                        btn.append(email);
-                    }
-                    btn.append(
+                    btn.append(label,
                         meter('Weekly', a.weekly_remaining, a.weekly_will_exceed,
                               a.weekly_resets_at, a.weekly_period_start, 168),
                         meter('Session', a.session_remaining, a.session_will_exceed,

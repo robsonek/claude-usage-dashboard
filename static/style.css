@@ -166,8 +166,6 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .acc-mini-label{font-weight:600;font-size:.86rem;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
 /* Plan chip (max/pro/team) — compact cousin of the accounts page .acc-type */
 .acc-mini-type{margin-left:auto;flex:none;font-weight:500;font-size:.58rem;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-border);padding:2px 7px;border-radius:5px}
-/* Email aligns under the label text (radio 11px + 8px gap); pulled up toward its header */
-.acc-mini-email{font-size:.64rem;color:var(--label);margin:-7px 0 1px 19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Radio dot = "this is a selectable option": empty ring, filled when active */
 .acc-mini-radio{flex:none;width:11px;height:11px;border-radius:50%;border:1.5px solid var(--label);transition:all .15s}
 .acc-mini:hover .acc-mini-radio{border-color:var(--accent)}
