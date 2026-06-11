@@ -56,7 +56,7 @@ header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em}
 /* Version badge (card-like chip, mirrors the freshness pill) */
 .version-badge{display:inline-flex;align-items:center;font-family:var(--mono);font-size:.72rem;color:var(--mid);border:1px solid var(--border);background:var(--panel);padding:5px 10px;border-radius:7px;letter-spacing:.03em}
 /* Buttons */
-.btn-refresh,.btn-logout{font-family:var(--mono);padding:6px 13px;border-radius:7px;font-size:.78rem;cursor:pointer;transition:all .15s;text-decoration:none;border:1px solid var(--border);background:var(--panel)}
+.btn-refresh,.btn-logout{font-family:var(--mono);padding:6px 13px;border-radius:7px;font-size:.78rem;cursor:pointer;transition:all .15s;text-decoration:none;border:1px solid var(--border);background:var(--panel);white-space:nowrap}
 .btn-refresh{color:var(--accent);border-color:var(--accent-border);background:var(--accent-soft)}
 .btn-refresh:hover{background:rgba(34,211,238,.18)}
 .btn-logout{color:var(--crit);border-color:rgba(244,63,94,.3)}
@@ -139,6 +139,9 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 @media(max-width:768px){
   .dashboard{padding:14px}
   header{flex-direction:column;gap:12px;text-align:center}
+  .header-actions{flex-wrap:wrap;justify-content:center}
+  /* Even-width account cards (flex-wrap alone left a ragged last row) */
+  .acc-mini{flex:1 1 40%}
   .current-status{grid-template-columns:1fr}
   .predictions{grid-template-columns:1fr}
   .chart-container canvas{height:220px!important}
@@ -192,7 +195,7 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .step-no{font-family:var(--mono);font-weight:700;font-size:.78rem;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-border);width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none}
 .step-body{display:flex;flex-direction:column;gap:10px;min-width:0;flex:1}
 .step-body p{color:var(--mid);font-size:.85rem}
-.btn-accent{font-family:var(--mono);align-self:flex-start;padding:8px 16px;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s;color:var(--accent);border:1px solid var(--accent-border);background:var(--accent-soft)}
+.btn-accent{font-family:var(--mono);align-self:flex-start;padding:8px 16px;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s;color:var(--accent);border:1px solid var(--accent-border);background:var(--accent-soft);white-space:nowrap}
 .btn-accent:hover{background:rgba(34,211,238,.18)}
 .auth-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .auth-actions[hidden]{display:none}
@@ -206,6 +209,12 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .add-msg{font-family:var(--mono);font-size:.78rem;color:var(--mid);padding:4px 0 8px;min-height:1.2em}
 
 @media(max-width:600px){
-  .account-row{flex-wrap:wrap}
-  .acc-actions{margin-left:0;width:100%}
+  /* Fixed grid instead of flex-wrap: dot | label+email | type badge, then the
+     error line (if any), then the action buttons in a 2-col grid. Flex-wrap
+     dropped badges/buttons in arbitrary order on narrow screens. */
+  .account-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px 10px;align-items:center}
+  .acc-type{justify-self:end}
+  .acc-error{grid-column:2/-1}
+  .acc-actions{grid-column:1/-1;margin-left:0;display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .acc-actions button{padding:9px 6px}
 }
