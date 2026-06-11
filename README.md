@@ -175,8 +175,7 @@ containing `KEY=value` lines — no `export`, no quotes needed.
 | DASHBOARD_USERNAME | Login username | admin |
 | SESSION_COOKIE_SECURE | Set to `1` when served over HTTPS (Secure cookie) | 0 |
 | ALLOW_DEFAULT_CREDENTIALS | Set to `1` to allow built-in defaults (local dev only) | unset |
-| CLAUDE_CREDENTIALS_FILE | Path to Claude CLI OAuth credentials | ~/.claude/.credentials.json |
-| CLAUDE_CONFIG_FILE | Path to Claude CLI config (account e-mail) | ~/.claude.json |
+| TOKEN_ENCRYPTION_KEY | Fernet key encrypting account OAuth tokens at rest — **required to add accounts** (v1.3.0+) | (adding accounts fails without it) |
 | RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and legacy `data/raw_debug/` files are pruned daily (the dashboard only charts up to 1 month) | 60 |
 
 Generate a secure secret key with:
@@ -184,6 +183,16 @@ Generate a secure secret key with:
 ```bash
 python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
+
+Generate the token-encryption key with:
+
+```bash
+python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+Add Claude accounts from the **Konta** page in the dashboard (OAuth, paste-the-code
+flow). Each account is polled every 5 minutes; the account bar lets you switch between
+them. Losing `TOKEN_ENCRYPTION_KEY` means re-adding every account.
 
 After changing any variable, restart the service:
 `sudo systemctl restart claude-dashboard`.
