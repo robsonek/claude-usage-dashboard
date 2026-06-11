@@ -180,3 +180,51 @@ def refresh_credentials(creds: Dict[str, Any],
     except OSError as e:
         raise UsageApiError(f'cannot write credentials file: {e}') from e
     return oauth
+
+
+def read_account_email() -> Optional[str]:
+    """Best-effort e-mail from ~/.claude.json (oauthAccount.emailAddress)."""
+    try:
+        with open(CLAUDE_CONFIG_FILE, encoding='utf-8') as f:
+            cfg = json.load(f)
+        email = (cfg.get('oauthAccount') or {}).get('emailAddress')
+        return email if isinstance(email, str) and '@' in email else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _http_get_usage(access_token: str) -> Dict[str, Any]:
+    req = urllib.request.Request(USAGE_URL, headers={
+        'Authorization': f'Bearer {access_token}',
+        'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': f'claude-code/{CLI_VERSION}',
+        'Accept': 'application/json',
+    })
+    try:
+        with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        raise UsageApiError(f'usage request failed: {type(e).__name__}: {e}') from e
+
+
+def fetch_usage() -> Dict[str, Any]:
+    """Full API path: credentials → (refresh) → GET usage → snapshot dict."""
+    creds = load_credentials()
+    oauth = creds['claudeAiOauth']
+    if needs_refresh(oauth):
+        oauth = refresh_credentials(creds)
+
+    api = _http_get_usage(oauth['accessToken'])
+    quotas = map_usage_response(api)
+    types = {q['type'] for q in quotas}
+    if 'session' not in types or 'weekly' not in types:
+        raise UsageApiError(
+            'incomplete usage response, windows: %s' % sorted(api.keys()))
+
+    return {
+        'account_type': oauth.get('subscriptionType') or 'unknown',
+        'email': read_account_email(),
+        'quotas': quotas,
+        'captured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'source': 'api',
+    }

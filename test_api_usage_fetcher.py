@@ -194,3 +194,61 @@ def test_refresh_failure_raises_and_leaves_file_untouched(creds_file, monkeypatc
     with pytest.raises(auf.UsageApiError):
         auf.refresh_credentials(creds)
     assert creds_file.read_text() == before
+
+
+# ---- fetch_usage: full API path ----
+
+@pytest.fixture
+def claude_config(tmp_path, monkeypatch):
+    cfg = tmp_path / '.claude.json'
+    cfg.write_text(json.dumps({'oauthAccount': {'emailAddress': 'rob@example.com'}}))
+    monkeypatch.setattr(auf, 'CLAUDE_CONFIG_FILE', str(cfg))
+    return cfg
+
+
+def _fresh_creds(monkeypatch):
+    """Make the stored token look fresh so fetch_usage skips the refresh path."""
+    far_future = int(time.time() * 1000) + 3_600_000
+    monkeypatch.setitem(CREDS['claudeAiOauth'], 'expiresAt', far_future)
+
+
+def test_fetch_usage_returns_snapshot_format(creds_file, claude_config, monkeypatch):
+    _fresh_creds(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured['url'] = req.full_url
+        captured['auth'] = req.get_header('Authorization')
+        captured['beta'] = req.get_header('Anthropic-beta')
+        return FakeResponse(PROD_SAMPLE)
+
+    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
+    result = auf.fetch_usage()
+
+    assert captured['url'] == auf.USAGE_URL
+    assert captured['auth'] == 'Bearer sk-ant-oat01-AAA'
+    assert captured['beta'] == 'oauth-2025-04-20'
+    assert result['account_type'] == 'max'
+    assert result['email'] == 'rob@example.com'
+    assert result['source'] == 'api'
+    assert len(result['quotas']) == 3
+    # captured_at parses in insert_to_db's expected shape
+    datetime.strptime(result['captured_at'], '%Y-%m-%dT%H:%M:%SZ')
+
+
+def test_fetch_usage_missing_core_windows_raises(creds_file, claude_config, monkeypatch):
+    _fresh_creds(monkeypatch)
+    monkeypatch.setattr(auf, '_urlopen',
+                        lambda req, timeout=None: FakeResponse({'five_hour': None,
+                                                                'seven_day': None}))
+    with pytest.raises(auf.UsageApiError):
+        auf.fetch_usage()
+
+
+def test_email_none_when_config_missing(creds_file, tmp_path, monkeypatch):
+    _fresh_creds(monkeypatch)
+    monkeypatch.setattr(auf, 'CLAUDE_CONFIG_FILE', str(tmp_path / 'absent.json'))
+    monkeypatch.setattr(auf, '_urlopen',
+                        lambda req, timeout=None: FakeResponse(PROD_SAMPLE))
+    result = auf.fetch_usage()
+    assert result['email'] is None
