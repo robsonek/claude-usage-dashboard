@@ -15,11 +15,12 @@ from urllib.parse import urlencode
 
 from api_usage_fetcher import CLIENT_ID, TOKEN_URL, CLI_VERSION
 
-# Authorize host mirrors what the current Claude Code CLI itself generates
-# (claude.com/cai/...). The older claude.ai/oauth/authorize still renders a
-# code, but its codes kept failing at the token endpoint with 429 — likely
-# treated as invalid and rate-limited (anty-abuse).
-AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize'
+# Mirror the working better-ccflare reference exactly. The 429 at the token
+# endpoint was NOT caused by this host (ccflare uses claude.ai and works) — it
+# came from spoofing `User-Agent: claude-code/...` on the token POST, which
+# Anthropic's anti-abuse flags. So: keep claude.ai here, and send NO User-Agent
+# on the token exchange (see exchange_code).
+AUTHORIZE_URL = 'https://claude.ai/oauth/authorize'
 REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback'
 PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 SCOPES = ['org:create_api_key', 'user:profile', 'user:inference',
@@ -73,9 +74,11 @@ def exchange_code(code_input: str, verifier: str, now_ms=None) -> dict:
         'redirect_uri': REDIRECT_URI,
         'client_id': CLIENT_ID,
     }).encode()
+    # NO User-Agent: claiming to be claude-code/<ver> on the token endpoint
+    # without matching the real CLI fingerprint trips anti-abuse → 429.
+    # better-ccflare sends only Content-Type here and works.
     req = urllib.request.Request(TOKEN_URL, data=body, method='POST', headers={
         'Content-Type': 'application/json',
-        'User-Agent': f'claude-code/{CLI_VERSION}',
     })
     try:
         with _urlopen(req, timeout=15) as resp:

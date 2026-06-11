@@ -107,9 +107,12 @@ def refresh_access_token(refresh_token: str, now_ms=None) -> Dict[str, Any]:
         'refresh_token': refresh_token,
         'client_id': CLIENT_ID,
     }).encode()
+    # NO User-Agent here: the token endpoint (platform.claude.com/v1/oauth/token)
+    # 429-flags requests that spoof `claude-code/<ver>` without the real CLI
+    # fingerprint. better-ccflare sends only Content-Type on this POST and works.
+    # (The usage endpoint below DOES accept the UA — keep it there.)
     req = urllib.request.Request(TOKEN_URL, data=body, method='POST', headers={
         'Content-Type': 'application/json',
-        'User-Agent': f'claude-code/{CLI_VERSION}',
     })
     try:
         with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
