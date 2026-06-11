@@ -1,17 +1,16 @@
-"""Fetch Claude usage straight from the OAuth usage API (no PTY scraping).
+"""Helpers for fetching Claude usage from the OAuth usage API (no PTY scraping).
 
-Primary collector path: GET https://api.anthropic.com/api/oauth/usage with the
-OAuth access token Claude CLI keeps in ~/.claude/.credentials.json (refreshed
-here when expired, same endpoint+client_id Claude Code uses). Output format is
-identical to usage_fetcher.py, so insert_to_db.py / DB / dashboard are untouched.
-collect_history.sh falls back to the PTY scraper when this exits non-zero.
+Library of pure(-ish) functions used by collect_all.py, the multi-account
+runner: token-refresh decision (needs_refresh_ms), refresh-grant POST
+(refresh_access_token), usage GET (_http_get_usage), response mapping
+(map_usage_response) and snapshot assembly (build_snapshot). No CLI entry
+point and no file reading — credentials live in the DB (accounts table) and
+the caller persists rotated tokens there.
 
 Method modeled on better-ccflare (packages/providers/src/usage-fetcher.ts).
 """
 import json
 import os
-import sys
-import tempfile
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -24,10 +23,6 @@ CLIENT_ID = os.environ.get('CLAUDE_OAUTH_CLIENT_ID',
                            '9d1c250a-e61b-44d9-88ed-5944d1962f5e')
 # Only used for the User-Agent header; keep loosely in sync with the CLI.
 CLI_VERSION = os.environ.get('CLAUDE_CLI_VERSION', '2.1.169')
-CREDENTIALS_FILE = os.environ.get(
-    'CLAUDE_CREDENTIALS_FILE', os.path.expanduser('~/.claude/.credentials.json'))
-CLAUDE_CONFIG_FILE = os.environ.get(
-    'CLAUDE_CONFIG_FILE', os.path.expanduser('~/.claude.json'))
 HTTP_TIMEOUT = 15
 REFRESH_MARGIN_MS = 120_000  # refresh when less than 2 min of token life left
 
@@ -45,7 +40,7 @@ WINDOW_MAP = [
 
 
 class UsageApiError(Exception):
-    """Any failure of the API fetch path (caller falls back to PTY)."""
+    """Any failure of the API fetch path (caller records it per account)."""
 
 
 def map_usage_response(api: Dict[str, Any],
@@ -96,57 +91,17 @@ def map_usage_response(api: Dict[str, Any],
     return quotas
 
 
-def load_credentials() -> Dict[str, Any]:
-    """Read the whole credentials file (all top-level keys preserved for write-back)."""
-    try:
-        with open(CREDENTIALS_FILE, encoding='utf-8') as f:
-            creds = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise UsageApiError(f'cannot read credentials file: {e}') from e
-    oauth = creds.get('claudeAiOauth')
-    if not isinstance(oauth, dict) or not oauth.get('accessToken'):
-        raise UsageApiError('credentials file has no claudeAiOauth.accessToken')
-    return creds
-
-
-def needs_refresh(oauth: Dict[str, Any], now_ms: Optional[int] = None) -> bool:
-    expires_at = oauth.get('expiresAt')
-    if not isinstance(expires_at, (int, float)):
+def needs_refresh_ms(expires_at_ms, now_ms=None) -> bool:
+    if not isinstance(expires_at_ms, (int, float)):
         return True
     if now_ms is None:
         now_ms = int(time.time() * 1000)
-    return now_ms >= expires_at - REFRESH_MARGIN_MS
+    return now_ms >= expires_at_ms - REFRESH_MARGIN_MS
 
 
-def _atomic_write_credentials(creds: Dict[str, Any]) -> None:
-    """Rewrite the credentials file atomically (tmp file + os.replace, mode 0600)."""
-    directory = os.path.dirname(CREDENTIALS_FILE) or '.'
-    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.credentials.')
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(creds, f)
-        os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, CREDENTIALS_FILE)
-    except OSError:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def refresh_credentials(creds: Dict[str, Any],
-                        now_ms: Optional[int] = None) -> Dict[str, Any]:
-    """Refresh the OAuth access token and persist rotated tokens back to disk.
-
-    On any failure nothing is written — the caller exits non-zero and the PTY
-    fallback (claude CLI) refreshes its own credentials as before.
-    """
-    oauth = creds['claudeAiOauth']
-    refresh_token = oauth.get('refreshToken')
-    if not refresh_token:
-        raise UsageApiError('no refreshToken in credentials file')
-
+def refresh_access_token(refresh_token: str, now_ms=None) -> Dict[str, Any]:
+    """POST the refresh grant; return new {access_token, refresh_token, expires_at}.
+    Does not touch any file — caller persists to the DB."""
     body = json.dumps({
         'grant_type': 'refresh_token',
         'refresh_token': refresh_token,
@@ -162,35 +117,34 @@ def refresh_credentials(creds: Dict[str, Any],
     except Exception as e:
         # Never include the request/response payload here: it carries tokens.
         raise UsageApiError(f'token refresh failed: {type(e).__name__}: {e}') from e
-
     access_token = token.get('access_token')
     if not access_token:
         raise UsageApiError('token refresh response has no access_token')
     if now_ms is None:
         now_ms = int(time.time() * 1000)
-
-    oauth['accessToken'] = access_token
-    if token.get('refresh_token'):
-        oauth['refreshToken'] = token['refresh_token']
-    if isinstance(token.get('expires_in'), (int, float)):
-        oauth['expiresAt'] = int(now_ms + token['expires_in'] * 1000)
-
-    try:
-        _atomic_write_credentials(creds)
-    except OSError as e:
-        raise UsageApiError(f'cannot write credentials file: {e}') from e
-    return oauth
+    return {
+        'access_token': access_token,
+        'refresh_token': token.get('refresh_token') or refresh_token,
+        'expires_at': int(now_ms + token.get('expires_in', 0) * 1000),
+    }
 
 
-def read_account_email() -> Optional[str]:
-    """Best-effort e-mail from ~/.claude.json (oauthAccount.emailAddress)."""
-    try:
-        with open(CLAUDE_CONFIG_FILE, encoding='utf-8') as f:
-            cfg = json.load(f)
-        email = (cfg.get('oauthAccount') or {}).get('emailAddress')
-        return email if isinstance(email, str) and '@' in email else None
-    except (OSError, json.JSONDecodeError):
-        return None
+def build_snapshot(api: Dict[str, Any], account: Dict[str, Any],
+                   now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Assemble a snapshot dict (insert_snapshot format) for one account."""
+    now = now or datetime.now(timezone.utc)
+    quotas = map_usage_response(api, now=now)
+    types = {q['type'] for q in quotas}
+    if 'session' not in types or 'weekly' not in types:
+        raise UsageApiError('incomplete usage response, windows: %s' % sorted(api.keys()))
+    return {
+        'account_id': account.get('id'),
+        'account_type': account.get('account_type') or 'unknown',
+        'email': account.get('email'),
+        'quotas': quotas,
+        'captured_at': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'source': 'api',
+    }
 
 
 def _http_get_usage(access_token: str) -> Dict[str, Any]:
@@ -205,46 +159,3 @@ def _http_get_usage(access_token: str) -> Dict[str, Any]:
             return json.loads(resp.read().decode())
     except Exception as e:
         raise UsageApiError(f'usage request failed: {type(e).__name__}: {e}') from e
-
-
-def fetch_usage() -> Dict[str, Any]:
-    """Full API path: credentials → (refresh) → GET usage → snapshot dict."""
-    creds = load_credentials()
-    oauth = creds['claudeAiOauth']
-    if needs_refresh(oauth):
-        oauth = refresh_credentials(creds)
-
-    api = _http_get_usage(oauth['accessToken'])
-    quotas = map_usage_response(api)
-    types = {q['type'] for q in quotas}
-    if 'session' not in types or 'weekly' not in types:
-        raise UsageApiError(
-            'incomplete usage response, windows: %s' % sorted(api.keys()))
-
-    return {
-        'account_type': oauth.get('subscriptionType') or 'unknown',
-        'email': read_account_email(),
-        'quotas': quotas,
-        'captured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'source': 'api',
-    }
-
-
-def main() -> int:
-    """CLI entry: snapshot JSON on stdout, exit 0; error JSON + exit 1 on failure.
-
-    Non-zero exit is the fallback signal for collect_history.sh. Error details
-    go to stderr (cron log); they never contain token material.
-    """
-    try:
-        result = fetch_usage()
-    except Exception as e:
-        print(json.dumps({'error': 'API usage fetch failed', 'details': str(e)}))
-        print(f'[api_usage_fetcher] {e}', file=sys.stderr)
-        return 1
-    print(json.dumps(result))
-    return 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())

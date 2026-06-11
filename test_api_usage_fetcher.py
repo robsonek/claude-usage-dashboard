@@ -1,11 +1,8 @@
-"""Tests for api_usage_fetcher: mapping, credentials, refresh, CLI contract.
+"""Tests for api_usage_fetcher: mapping, token refresh, snapshot assembly.
 
 All offline — HTTP is monkeypatched via api_usage_fetcher._urlopen.
 """
 import json
-import os
-import time
-import urllib.error
 from datetime import datetime, timezone
 
 import pytest
@@ -92,52 +89,48 @@ def test_reset_in_past_clamps_time_remaining_to_zero():
     assert session['time_remaining_seconds'] == 0
 
 
-# ---- credentials & refresh decision ----
+# ---- refactored multi-account helpers ----
 
-CREDS = {
-    "claudeAiOauth": {
-        "accessToken": "sk-ant-oat01-AAA",
-        "refreshToken": "sk-ant-ort01-BBB",
-        "expiresAt": 1780000000000,
-        "scopes": ["user:inference", "user:profile"],
-        "subscriptionType": "max",
-        "rateLimitTier": "default",
-    },
-    "someOtherTopLevelKey": {"keep": "me"},
-}
+def test_needs_refresh_ms_margin():
+    assert auf.needs_refresh_ms(1_000_000, now_ms=1_000_000 - 60_000) is True   # 60s < 2min
+    assert auf.needs_refresh_ms(1_000_000, now_ms=1_000_000 - 600_000) is False  # 10min left
 
 
-@pytest.fixture
-def creds_file(tmp_path, monkeypatch):
-    path = tmp_path / '.credentials.json'
-    path.write_text(json.dumps(CREDS))
-    monkeypatch.setattr(auf, 'CREDENTIALS_FILE', str(path))
-    return path
+def test_refresh_access_token_returns_new_tokens(monkeypatch):
+    monkeypatch.setattr(auf, '_urlopen',
+                        lambda req, timeout=None: FakeResponse(
+                            {'access_token': 'AT2', 'refresh_token': 'RT2', 'expires_in': 28800}))
+    out = auf.refresh_access_token('RT1', now_ms=1_000_000)
+    assert out == {'access_token': 'AT2', 'refresh_token': 'RT2',
+                   'expires_at': 1_000_000 + 28800 * 1000}
 
 
-def test_load_credentials_reads_oauth_section(creds_file):
-    creds = auf.load_credentials()
-    assert creds['claudeAiOauth']['accessToken'] == 'sk-ant-oat01-AAA'
+def test_refresh_access_token_keeps_old_refresh_if_absent(monkeypatch):
+    monkeypatch.setattr(auf, '_urlopen',
+                        lambda req, timeout=None: FakeResponse(
+                            {'access_token': 'AT2', 'expires_in': 100}))
+    out = auf.refresh_access_token('RT1', now_ms=0)
+    assert out['refresh_token'] == 'RT1'  # rotation optional
 
 
-def test_load_credentials_missing_file_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(auf, 'CREDENTIALS_FILE', str(tmp_path / 'nope.json'))
+def test_build_snapshot_from_account_and_api():
+    account = {'id': 7, 'email': 'a@x.com', 'account_type': 'max'}
+    snap = auf.build_snapshot(PROD_SAMPLE, account, now=NOW)
+    assert snap['account_id'] == 7
+    assert snap['email'] == 'a@x.com'
+    assert snap['account_type'] == 'max'
+    assert snap['source'] == 'api'
+    assert len(snap['quotas']) == 3
+    datetime.strptime(snap['captured_at'], '%Y-%m-%dT%H:%M:%SZ')
+
+
+def test_build_snapshot_incomplete_raises():
     with pytest.raises(auf.UsageApiError):
-        auf.load_credentials()
+        auf.build_snapshot({'five_hour': None, 'seven_day': None},
+                           {'id': 1, 'email': 'a@x.com', 'account_type': 'max'}, now=NOW)
 
 
-def test_needs_refresh_false_for_fresh_token():
-    now_ms = 1780000000000 - 3_600_000  # an hour before expiry
-    assert auf.needs_refresh(CREDS['claudeAiOauth'], now_ms=now_ms) is False
-
-
-def test_needs_refresh_true_within_margin_and_when_missing():
-    near = 1780000000000 - 60_000  # 60s left < 120s margin
-    assert auf.needs_refresh(CREDS['claudeAiOauth'], now_ms=near) is True
-    assert auf.needs_refresh({'accessToken': 'x'}, now_ms=0) is True
-
-
-# ---- token refresh + atomic write-back ----
+# ---- HTTP stubbing helper ----
 
 class FakeResponse:
     def __init__(self, payload, status=200):
@@ -152,126 +145,3 @@ class FakeResponse:
 
     def __exit__(self, *a):
         return False
-
-
-def test_refresh_updates_tokens_and_preserves_other_fields(creds_file, monkeypatch):
-    captured = {}
-
-    def fake_urlopen(req, timeout=None):
-        captured['url'] = req.full_url
-        captured['body'] = json.loads(req.data.decode())
-        return FakeResponse({'access_token': 'sk-ant-oat01-NEW',
-                             'refresh_token': 'sk-ant-ort01-NEW',
-                             'expires_in': 28800})
-
-    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
-    creds = auf.load_credentials()
-    oauth = auf.refresh_credentials(creds, now_ms=1_000_000)
-
-    assert captured['url'] == auf.TOKEN_URL
-    assert captured['body']['grant_type'] == 'refresh_token'
-    assert captured['body']['refresh_token'] == 'sk-ant-ort01-BBB'
-    assert captured['body']['client_id'] == auf.CLIENT_ID
-
-    assert oauth['accessToken'] == 'sk-ant-oat01-NEW'
-    on_disk = json.loads(creds_file.read_text())
-    assert on_disk['claudeAiOauth']['accessToken'] == 'sk-ant-oat01-NEW'
-    assert on_disk['claudeAiOauth']['refreshToken'] == 'sk-ant-ort01-NEW'
-    assert on_disk['claudeAiOauth']['expiresAt'] == 1_000_000 + 28800 * 1000
-    # untouched fields survive the rewrite
-    assert on_disk['someOtherTopLevelKey'] == {'keep': 'me'}
-    assert on_disk['claudeAiOauth']['subscriptionType'] == 'max'
-    assert oct(os.stat(creds_file).st_mode & 0o777) == oct(0o600)
-
-
-def test_refresh_failure_raises_and_leaves_file_untouched(creds_file, monkeypatch):
-    def fake_urlopen(req, timeout=None):
-        raise urllib.error.HTTPError(req.full_url, 400, 'Bad Request', None, None)
-
-    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
-    creds = auf.load_credentials()
-    before = creds_file.read_text()
-    with pytest.raises(auf.UsageApiError):
-        auf.refresh_credentials(creds)
-    assert creds_file.read_text() == before
-
-
-# ---- fetch_usage: full API path ----
-
-@pytest.fixture
-def claude_config(tmp_path, monkeypatch):
-    cfg = tmp_path / '.claude.json'
-    cfg.write_text(json.dumps({'oauthAccount': {'emailAddress': 'rob@example.com'}}))
-    monkeypatch.setattr(auf, 'CLAUDE_CONFIG_FILE', str(cfg))
-    return cfg
-
-
-def _fresh_creds(creds_path):
-    """Make the stored token look fresh so fetch_usage skips the refresh path."""
-    data = json.loads(creds_path.read_text())
-    data['claudeAiOauth']['expiresAt'] = int(time.time() * 1000) + 3_600_000
-    creds_path.write_text(json.dumps(data))
-
-
-def test_fetch_usage_returns_snapshot_format(creds_file, claude_config, monkeypatch):
-    _fresh_creds(creds_file)
-    captured = {}
-
-    def fake_urlopen(req, timeout=None):
-        captured['url'] = req.full_url
-        captured['auth'] = req.get_header('Authorization')
-        captured['beta'] = req.get_header('Anthropic-beta')
-        return FakeResponse(PROD_SAMPLE)
-
-    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
-    result = auf.fetch_usage()
-
-    assert captured['url'] == auf.USAGE_URL
-    assert captured['auth'] == 'Bearer sk-ant-oat01-AAA'
-    assert captured['beta'] == 'oauth-2025-04-20'
-    assert result['account_type'] == 'max'
-    assert result['email'] == 'rob@example.com'
-    assert result['source'] == 'api'
-    assert len(result['quotas']) == 3
-    # captured_at parses in insert_to_db's expected shape
-    datetime.strptime(result['captured_at'], '%Y-%m-%dT%H:%M:%SZ')
-
-
-def test_fetch_usage_missing_core_windows_raises(creds_file, claude_config, monkeypatch):
-    _fresh_creds(creds_file)
-    monkeypatch.setattr(auf, '_urlopen',
-                        lambda req, timeout=None: FakeResponse({'five_hour': None,
-                                                                'seven_day': None}))
-    with pytest.raises(auf.UsageApiError):
-        auf.fetch_usage()
-
-
-def test_email_none_when_config_missing(creds_file, tmp_path, monkeypatch):
-    _fresh_creds(creds_file)
-    monkeypatch.setattr(auf, 'CLAUDE_CONFIG_FILE', str(tmp_path / 'absent.json'))
-    monkeypatch.setattr(auf, '_urlopen',
-                        lambda req, timeout=None: FakeResponse(PROD_SAMPLE))
-    result = auf.fetch_usage()
-    assert result['email'] is None
-
-
-# ---- CLI contract (exit codes drive the collect_history.sh fallback) ----
-
-def test_main_success_prints_json_and_exits_zero(creds_file, claude_config,
-                                                 monkeypatch, capsys):
-    _fresh_creds(creds_file)
-    monkeypatch.setattr(auf, '_urlopen',
-                        lambda req, timeout=None: FakeResponse(PROD_SAMPLE))
-    assert auf.main() == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out['source'] == 'api'
-    assert len(out['quotas']) == 3
-
-
-def test_main_failure_prints_error_json_and_exits_one(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(auf, 'CREDENTIALS_FILE', str(tmp_path / 'absent.json'))
-    assert auf.main() == 1
-    captured = capsys.readouterr()
-    out = json.loads(captured.out)
-    assert out['error'] == 'API usage fetch failed'
-    assert 'api_usage_fetcher' in captured.err
