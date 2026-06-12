@@ -392,7 +392,12 @@
                 plugins: {
                     legend: {
                         display: true,
-                        position: 'top'
+                        position: 'top',
+                        labels: {
+                            // Keep legend in dataset order (Usage, Target) — the
+                            // `order` z-index override would flip it otherwise.
+                            sort: (a, b) => a.datasetIndex - b.datasetIndex
+                        }
                     },
                     tooltip: {
                         enabled: true,
@@ -442,8 +447,9 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#22d3ee', backgroundColor: 'rgba(34, 211, 238, 0.12)', fill: true, data: [], segment: usageSegment },
-                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
+                        // order: lower draws later (on top) — keep Target above Usage.
+                        { label: 'Usage', borderColor: '#22d3ee', backgroundColor: 'rgba(34, 211, 238, 0.12)', fill: true, data: [], segment: usageSegment, order: 2 },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment, order: 1 }
                     ]
                 }
             });
@@ -452,8 +458,8 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, data: [], segment: usageSegment },
-                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
+                        { label: 'Usage', borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, data: [], segment: usageSegment, order: 2 },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment, order: 1 }
                     ]
                 }
             });
@@ -462,8 +468,8 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.12)', fill: true, data: [], segment: usageSegment },
-                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
+                        { label: 'Usage', borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.12)', fill: true, data: [], segment: usageSegment, order: 2 },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment, order: 1 }
                     ]
                 }
             });
