@@ -312,16 +312,30 @@
         // Extract distinct period boundaries from a dataset's points.
         // Each point carries periodStartAt (frozen at insert time); a *change*
         // between consecutive points is a real reset that fired in-window.
+        // The marker is placed at the *end* of the old cycle (the previous
+        // point's resetAt), not at the start of the new one — for session
+        // quotas the new period only begins at first activity, which can be
+        // hours after the limit actually reset. Falls back to the new
+        // periodStartAt when the previous resetAt is missing or claims a
+        // time after the new period began (glitched row).
         function extractResetMarkers(data) {
             if (!Array.isArray(data) || data.length === 0) return [];
             const out = [];
-            let prev = null;
+            let prevStart = null;
+            let prevPoint = null;
             for (const p of data) {
                 if (!p.periodStartAt) continue;
-                if (p.periodStartAt !== prev) {
-                    if (prev !== null) out.push(p.periodStartAt);
-                    prev = p.periodStartAt;
+                if (p.periodStartAt !== prevStart) {
+                    if (prevStart !== null) {
+                        const prevResetMs = prevPoint && prevPoint.resetAt
+                            ? new Date(prevPoint.resetAt).getTime() : NaN;
+                        const newStartMs = new Date(p.periodStartAt).getTime();
+                        out.push(prevResetMs && prevResetMs <= newStartMs
+                            ? prevPoint.resetAt : p.periodStartAt);
+                    }
+                    prevStart = p.periodStartAt;
                 }
+                prevPoint = p;
             }
             return out;
         }
@@ -428,7 +442,7 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#22d3ee', backgroundColor: 'rgba(34, 211, 238, 0.12)', fill: true, data: [] },
+                        { label: 'Usage', borderColor: '#22d3ee', backgroundColor: 'rgba(34, 211, 238, 0.12)', fill: true, data: [], segment: usageSegment },
                         { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
@@ -438,7 +452,7 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, data: [] },
+                        { label: 'Usage', borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.12)', fill: true, data: [], segment: usageSegment },
                         { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
@@ -448,7 +462,7 @@
                 ...chartConfig,
                 data: {
                     datasets: [
-                        { label: 'Usage', borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.12)', fill: true, data: [] },
+                        { label: 'Usage', borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.12)', fill: true, data: [], segment: usageSegment },
                         { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment }
                     ]
                 }
@@ -717,6 +731,21 @@
                 }
                 return undefined;
             }
+        };
+
+        // Same idea for the Usage line (points carry periodStartAt, not
+        // periodStart), so the post-reset drop doesn't cover the dashed
+        // reset marker. Usage is filled, so the area fill of the crossing
+        // segment has to be hidden too, not just the stroke.
+        function usageCrossesBoundary(ctx) {
+            const ds = ctx.chart.data.datasets[ctx.datasetIndex];
+            const p0 = ds.data[ctx.p0DataIndex];
+            const p1 = ds.data[ctx.p1DataIndex];
+            return !!(p0 && p1 && p0.periodStartAt !== p1.periodStartAt);
+        }
+        const usageSegment = {
+            borderColor: ctx => usageCrossesBoundary(ctx) ? 'transparent' : undefined,
+            backgroundColor: ctx => usageCrossesBoundary(ctx) ? 'transparent' : undefined
         };
 
         // Update predictions
