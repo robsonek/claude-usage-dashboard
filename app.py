@@ -178,8 +178,13 @@ def calculate_prediction(history, limit_type='weekly'):
 
     def is_same_period(reset_str):
         """Check if resets_at is within 10 minutes of current period"""
-        if not reset_str or not current_reset_ts:
-            return True  # No filter if we can't compare
+        if not current_reset_ts:
+            return True  # No anchor to compare against — can't filter
+        if not reset_str:
+            # No resets_at = no active window (idle session reading). Such
+            # zero-usage records are NOT part of the current period; letting
+            # them in flattens the regression slope ~10x.
+            return False
         try:
             reset_ts = datetime.fromisoformat(reset_str.replace('Z', '+00:00'))
             if not reset_ts.tzinfo:
