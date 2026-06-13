@@ -19,6 +19,14 @@ from typing import Any, Dict, List, Optional
 
 USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
+MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
+# Cheapest model; starting the 5h (session) window works with ANY model and Haiku
+# does not touch the 7d Sonnet/Opus windows. Overridable for forward-compat.
+PRIMER_MODEL = os.environ.get('PRIMER_MODEL', 'claude-haiku-4-5')
+# OAuth (subscription) tokens require the first system block to be exactly this
+# Claude Code preamble — Anthropic enforces it on the Messages API.
+PRIMER_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude."
+PRIMER_TEXT = 'Hi'
 # Public Claude Code OAuth client id (same one better-ccflare ships as default).
 CLIENT_ID = os.environ.get('CLAUDE_OAUTH_CLIENT_ID',
                            '9d1c250a-e61b-44d9-88ed-5944d1962f5e')
@@ -181,3 +189,37 @@ def _http_get_usage(access_token: str) -> Dict[str, Any]:
             status=e.code) from e
     except Exception as e:
         raise UsageApiError(f'usage request failed: {type(e).__name__}: {e}') from e
+
+
+def send_haiku_primer(access_token: str, model: Optional[str] = None) -> Dict[str, Any]:
+    """POST a minimal 'Hi' to start the 5h session window. Returns the parsed body.
+
+    Uses the same OAuth surface as _http_get_usage (Bearer token, oauth beta header,
+    claude-code User-Agent — accepted on the usage endpoint, so reused here). The
+    `system` preamble is mandatory for subscription OAuth tokens. Raises
+    UsageApiError(status=...) on an HTTP error so the caller can refresh+retry on 401.
+    Never logs the request/response body (it carries the bearer token).
+    """
+    body = json.dumps({
+        'model': model or PRIMER_MODEL,
+        'max_tokens': 1,
+        'system': PRIMER_SYSTEM,
+        'messages': [{'role': 'user', 'content': PRIMER_TEXT}],
+    }).encode()
+    req = urllib.request.Request(MESSAGES_URL, data=body, method='POST', headers={
+        'Authorization': f'Bearer {access_token}',
+        'anthropic-beta': 'oauth-2025-04-20',
+        'anthropic-version': '2023-06-01',
+        'User-Agent': f'claude-code/{CLI_VERSION}',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    })
+    try:
+        with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise UsageApiError(
+            f'primer request failed: HTTPError: HTTP Error {e.code}: {e.reason}',
+            status=e.code) from e
+    except Exception as e:
+        raise UsageApiError(f'primer request failed: {type(e).__name__}: {e}') from e

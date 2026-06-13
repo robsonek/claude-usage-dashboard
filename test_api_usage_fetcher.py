@@ -3,6 +3,7 @@
 All offline — HTTP is monkeypatched via api_usage_fetcher._urlopen.
 """
 import json
+import urllib.error
 from datetime import datetime, timezone
 
 import pytest
@@ -145,3 +146,38 @@ class FakeResponse:
 
     def __exit__(self, *a):
         return False
+
+
+def test_send_haiku_primer_posts_hi_with_oauth_headers(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured['url'] = req.full_url
+        captured['method'] = req.get_method()
+        captured['body'] = json.loads(req.data.decode())
+        captured['auth'] = req.get_header('Authorization')
+        captured['beta'] = req.get_header('Anthropic-beta')   # urllib title-cases keys
+        captured['ua'] = req.get_header('User-agent')
+        return FakeResponse({'id': 'msg_1', 'role': 'assistant'})
+
+    monkeypatch.setattr(auf, '_urlopen', fake_urlopen)
+    out = auf.send_haiku_primer('TOK')
+    assert out['id'] == 'msg_1'
+    assert captured['method'] == 'POST'
+    assert captured['url'] == auf.MESSAGES_URL
+    assert captured['body']['model'] == auf.PRIMER_MODEL
+    assert captured['body']['messages'][0]['content'] == 'Hi'
+    assert captured['body']['system'] == auf.PRIMER_SYSTEM
+    assert captured['auth'] == 'Bearer TOK'
+    assert captured['beta'] == 'oauth-2025-04-20'
+    assert captured['ua'].startswith('claude-code/')
+
+
+def test_send_haiku_primer_maps_http_error_status(monkeypatch):
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(auf.MESSAGES_URL, 403, 'Forbidden', {}, None)
+
+    monkeypatch.setattr(auf, '_urlopen', boom)
+    with pytest.raises(auf.UsageApiError) as ei:
+        auf.send_haiku_primer('TOK')
+    assert ei.value.status == 403
