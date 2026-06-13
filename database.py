@@ -666,6 +666,27 @@ class UsageDatabase:
             out.append(d)
         return out
 
+    def get_account_for_primer(self, account_id):
+        """One account with DECRYPTED tokens, regardless of is_active.
+
+        Returns a dict (id, label, email, account_type, access_token,
+        refresh_token, expires_at) or None if the row does not exist. Priming is an
+        on-demand action, so a disabled account is still eligible. A missing/wrong
+        encryption key raises CryptoError (route maps it to 500).
+        """
+        import crypto_util
+        row = self.conn.execute("""
+            SELECT id, label, email, account_type, access_token, refresh_token,
+                   expires_at
+            FROM accounts WHERE id = ?
+        """, (account_id,)).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d['access_token'] = crypto_util.decrypt(d['access_token'])
+        d['refresh_token'] = crypto_util.decrypt(d['refresh_token'])
+        return d
+
     def update_account_tokens(self, account_id, access_token, refresh_token, expires_at):
         # Lazy import (see add_or_update_account): keep database.py importable
         # before cryptography is installed on first deploy.
