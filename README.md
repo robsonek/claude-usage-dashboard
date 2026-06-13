@@ -273,11 +273,20 @@ database (Fernet), so `TOKEN_ENCRYPTION_KEY` must be set in `.env` first (see
    click **Add account**.
 
 The account is then polled every 5 minutes. Add as many accounts as you like; the
-account bar on the dashboard switches between them. Each row has a **Refresh
-session** button that re-runs this flow to repair an account whose token was revoked
-(it matches by e-mail, so history is kept). Multi-account support requires v1.3.0+.
+account bar on the dashboard switches between them. Multi-account support requires v1.3.0+.
 
-- **Start 5h window** — per-account button on the Accounts page sends a minimal message to Haiku to anchor the start of the 5-hour usage window (skips if a window is already active).
+Each account row on the **Accounts** page offers these actions:
+
+- **Start 5h window** (v1.6.1+) — sends a minimal `"Hi"` message to Claude Haiku to
+  deliberately anchor the start of that account's rolling 5-hour usage window (for
+  example, at the beginning of your workday so the block lines up with when you actually
+  work). It first reads the current usage: if a 5-hour window is already active it does
+  nothing and just reports the reset time, so it never wastes quota. The message is sent
+  with the account's own subscription token — no separate API credits are billed.
+- **Refresh session** — re-runs the authorization flow to repair an account whose token
+  was revoked (e.g. logout or CLI reinstall). It matches by e-mail, so history is kept.
+- **Enable / Disable** — pause or resume polling for an account without deleting its history.
+- **Rename / Delete** — relabel an account, or remove it (its snapshots are retained).
 
 > The OAuth token endpoint is fronted by Cloudflare and is sensitive to the
 > `User-Agent`; the app already sends the value that works. If a code exchange
