@@ -50,3 +50,70 @@ def test_get_account_for_primer_decrypts_tokens(db):
 
 def test_get_account_for_primer_missing_returns_none(db):
     assert db.get_account_for_primer(424242) is None
+
+
+def test_prime_starts_window_when_inactive(db, monkeypatch):
+    a = _add(db)
+    account = db.get_account_for_primer(a)
+    calls = {'usage': 0, 'primer': 0}
+
+    def usage(token):
+        calls['usage'] += 1
+        return _sample(PAST) if calls['usage'] == 1 else _sample(FUTURE)
+
+    def send(token, model=None):
+        calls['primer'] += 1
+        return {'id': 'msg_1'}
+
+    monkeypatch.setattr(primer.auf, '_http_get_usage', usage)
+    monkeypatch.setattr(primer.auf, 'send_haiku_primer', send)
+
+    result = primer.prime_account(db, account)
+    assert result['started'] is True
+    assert result['resets_at'] == '2999-01-01T00:00:00Z'
+    assert calls['primer'] == 1            # exactly one message sent
+    assert calls['usage'] == 2             # guard GET + post-send GET
+    assert db.get_current(account_id=a) is not None  # snapshot was inserted
+
+
+def test_prime_blocks_when_window_active(db, monkeypatch):
+    a = _add(db)
+    account = db.get_account_for_primer(a)
+    sent = {'n': 0}
+
+    monkeypatch.setattr(primer.auf, '_http_get_usage', lambda token: _sample(FUTURE))
+    monkeypatch.setattr(primer.auf, 'send_haiku_primer',
+                        lambda token, model=None: sent.__setitem__('n', sent['n'] + 1))
+
+    result = primer.prime_account(db, account)
+    assert result['started'] is False
+    assert result['resets_at'] == '2999-01-01T00:00:00Z'
+    assert sent['n'] == 0                  # no message sent when already active
+
+
+def test_prime_retries_primer_after_401(db, monkeypatch):
+    a = _add(db)
+    account = db.get_account_for_primer(a)
+    usage_n = {'n': 0}
+    primer_n = {'n': 0}
+
+    def usage(token):
+        usage_n['n'] += 1
+        return _sample(PAST) if usage_n['n'] == 1 else _sample(FUTURE)
+
+    def send(token, model=None):
+        primer_n['n'] += 1
+        if primer_n['n'] == 1:
+            raise primer.auf.UsageApiError('primer 401', status=401)
+        return {'id': 'msg_1'}
+
+    monkeypatch.setattr(primer.auf, '_http_get_usage', usage)
+    monkeypatch.setattr(primer.auf, 'send_haiku_primer', send)
+    monkeypatch.setattr(primer.auf, 'refresh_access_token',
+                        lambda rt, now_ms=None: {'access_token': 'AT2',
+                            'refresh_token': 'RT2', 'expires_at': FAR})
+
+    result = primer.prime_account(db, account)
+    assert result['started'] is True
+    assert primer_n['n'] == 2                              # retried after refresh
+    assert db.get_account_for_primer(a)['access_token'] == 'AT2'  # rotated token persisted
