@@ -27,6 +27,9 @@
             <span class="acc-type">{{ a.account_type or '?' }}</span>
             {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ read error</span>{% endif %}
             <span class="acc-actions">
+                {% if a.is_active %}
+                <button class="primer" onclick="startSession({{ a.id }})">Start 5h</button>
+                {% endif %}
                 <button class="reauth" data-email="{{ a.email }}">Refresh session</button>
                 {% if a.is_active %}
                 <button onclick="op({{ a.id }}, 'disable')">Disable</button>
@@ -41,6 +44,7 @@
         <p class="acc-empty">No accounts — add your first account below.</p>
         {% endfor %}
     </section>
+    <p id="acc-msg" class="add-msg" role="status"></p>
 
     <p class="section-label">Add account</p>
     <section class="accounts-panel add-account">
@@ -123,6 +127,24 @@ async function completeOAuth() {
 async function op(id, name) {
     await fetch(`/accounts/${id}/${name}`, {method:'POST'});
     location.reload();
+}
+async function startSession(id) {
+    if (!confirm('Start a fresh 5h window for this account? (sends a tiny "Hi" to Haiku)')) return;
+    const msg = document.getElementById('acc-msg');
+    msg.textContent = 'Starting 5h window…';
+    try {
+        const r = await fetch(`/accounts/${id}/start_session`, {method: 'POST'});
+        const d = await r.json();
+        if (!r.ok) { msg.textContent = 'Error: ' + (d.error || r.status); return; }
+        const reset = d.resets_at
+            ? new Date(d.resets_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+            : 'unknown';
+        msg.textContent = d.started
+            ? `5h window started — resets at ${reset}.`
+            : `Window already active — resets at ${reset}.`;
+    } catch (e) {
+        msg.textContent = 'Error: ' + e;
+    }
 }
 async function delAcc(id) {
     if (!confirm('Delete this account? Its snapshot history will be kept.')) return;

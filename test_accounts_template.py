@@ -47,3 +47,15 @@ def test_rendered_template_escapes_malicious_email():
         rendered = render_template('accounts.html', version='x', accounts=accounts)
     assert '<script>alert(1)</script>' not in rendered
     assert 'data-email="x&#34;&gt;&lt;script&gt;' in rendered
+
+
+def test_start_session_button_present():
+    html = _read("templates/accounts.html")
+    assert 'startSession({{ a.id }})' in html
+    assert '>Start 5h<' in html
+
+
+def test_start_session_js_handler_defined():
+    html = _read("templates/accounts.html")
+    assert 'async function startSession(' in html
+    assert '/start_session' in html
