@@ -9,9 +9,10 @@
 <body>
 <div class="dashboard accounts-page">
     <header>
-        <h1>Accounts <span class="version-badge" title="App version">v{{ version }}</span></h1>
+        <h1>Claude Usage Dashboard <span class="version-badge" title="App version">v{{ version }}</span></h1>
         <div class="header-actions">
-            <a href="{{ url_for('dashboard') }}" class="btn-refresh">← Dashboard</a>
+            <a href="{{ url_for('dashboard') }}" class="btn-refresh" title="Back to dashboard">Dashboard</a>
+            <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
         </div>
     </header>
 
@@ -36,7 +37,7 @@
                 {% else %}
                 <button onclick="op({{ a.id }}, 'enable')">Enable</button>
                 {% endif %}
-                <button onclick="renameAcc({{ a.id }})">Rename</button>
+                <button class="rename-btn" data-id="{{ a.id }}" data-label="{{ a.label }}">Rename</button>
                 <button class="danger" onclick="delAcc({{ a.id }})">Delete</button>
             </span>
         </div>
@@ -48,28 +49,41 @@
     <p class="section-label">Add account</p>
     <section class="accounts-panel add-account">
         <div class="add-step">
-            <span class="step-no">1</span>
-            <div class="step-body">
-                <p>Generate an authorization link and sign in to the Claude account of your choice.</p>
-                <button id="start-btn" class="btn-accent" onclick="startOAuth()">Start authorization</button>
-                <div class="auth-actions" id="auth-actions" hidden>
-                    <a id="auth-link" class="auth-link" href="#" target="_blank" rel="noopener">Open authorization page ↗</a>
-                    <button type="button" class="btn-ghost" onclick="copyAuthUrl()">Copy URL</button>
+            <div class="step-head">
+                <span class="step-no">1</span>
+                <p class="step-title">Generate an authorization link for the Claude account you want to add.</p>
+            </div>
+            <div class="step-content">
+                <div class="step-controls">
+                    <button id="start-btn" class="btn-ghost" onclick="startOAuth()">Generate link</button>
                 </div>
             </div>
         </div>
         <div class="add-step" id="oauth-step2" hidden>
-            <span class="step-no">2</span>
-            <div class="step-body">
-                <p>Copy the code shown there and paste it here:</p>
-                <div class="add-form">
-                    <input id="code-input" type="text" placeholder="paste code#state" autocomplete="off">
-                    <input id="label-input" type="text" placeholder="label (optional)">
-                    <button class="btn-accent" onclick="completeOAuth()">Add account</button>
+            <div class="step-head">
+                <span class="step-no">2</span>
+                <p class="step-title">Open the authorization page, sign in to that account, and copy the code it shows.</p>
+            </div>
+            <div class="step-content">
+                <div class="step-controls" id="auth-actions">
+                    <a id="auth-link" class="btn-ghost" href="#" target="_blank" rel="noopener">Open authorization page ↗</a>
+                    <button type="button" class="btn-ghost" onclick="copyAuthUrl()">Copy URL</button>
                 </div>
             </div>
         </div>
-        <p id="add-msg" class="add-msg" role="status"></p>
+        <div class="add-step" id="oauth-step3" hidden>
+            <div class="step-head">
+                <span class="step-no">3</span>
+                <p class="step-title">Paste the code here to finish.</p>
+            </div>
+            <div class="step-content">
+                <div class="add-form">
+                    <input id="code-input" class="code-input" type="text" placeholder="paste code#state" autocomplete="off">
+                    <input id="label-input" class="label-input" type="text" placeholder="label (optional)">
+                    <button class="btn-ghost" onclick="completeOAuth()">Add account</button>
+                </div>
+            </div>
+        </div>
     </section>
 </div>
 <div id="toast-host" class="toast-host" role="status" aria-live="polite"></div>
@@ -168,31 +182,97 @@ function confirmDialog({title, body, confirmLabel = 'Confirm', cancelLabel = 'Ca
         document.addEventListener('keydown', onKey);
     });
 }
+// Text-input modal (on-theme replacement for prompt()). Resolves to the entered
+// string on confirm, or null on cancel/Esc/backdrop. Unlike confirmDialog, Enter in
+// the field DOES submit — that's the natural gesture for a prompt.
+function promptDialog({title, label = '', value = '', placeholder = '', confirmLabel = 'Save', cancelLabel = 'Cancel'}) {
+    if (document.querySelector('.modal-backdrop')) return Promise.resolve(null);
+    return new Promise(resolve => {
+        const trigger = document.activeElement;
+        const main = document.querySelector('.dashboard');
+        const uid = `modal-${++_modalUid}`;
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML = `
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="${uid}-title">
+                <h3 id="${uid}-title"></h3>
+                <label class="modal-label" for="${uid}-input"></label>
+                <input id="${uid}-input" class="modal-input" type="text" autocomplete="off">
+                <div class="modal-actions">
+                    <button type="button" class="modal-btn-cancel"></button>
+                    <button type="button" class="modal-btn-confirm"></button>
+                </div>
+            </div>`;
+        backdrop.querySelector(`#${uid}-title`).textContent = title;
+        const lab = backdrop.querySelector('.modal-label');
+        lab.textContent = label;
+        if (!label) lab.hidden = true;
+        const input = backdrop.querySelector('.modal-input');
+        input.value = value;                 // value set via property (never interpolated into HTML)
+        input.placeholder = placeholder;
+        const cancelBtn = backdrop.querySelector('.modal-btn-cancel');
+        const confirmBtn = backdrop.querySelector('.modal-btn-confirm');
+        cancelBtn.textContent = cancelLabel;
+        confirmBtn.textContent = confirmLabel;
+        if (main) main.inert = true;
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add('show'));
+        input.focus(); input.select();       // pre-select so a pre-filled value is easy to overwrite
+        let done = false;
+        function close(result) {
+            if (done) return;
+            done = true;
+            document.removeEventListener('keydown', onKey);
+            if (main) main.inert = false;
+            backdrop.classList.remove('show');
+            const rm = () => backdrop.remove();
+            backdrop.addEventListener('transitionend', rm, {once: true});
+            setTimeout(rm, 300);
+            if (trigger && trigger.focus) trigger.focus();
+            resolve(result);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); close(null); }
+            else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); close(input.value); }
+            else if (e.key === 'Tab') {
+                e.preventDefault();
+                const order = [input, cancelBtn, confirmBtn];
+                const i = order.indexOf(document.activeElement);
+                const next = e.shiftKey ? (i <= 0 ? order.length - 1 : i - 1) : (i === order.length - 1 ? 0 : i + 1);
+                order[next].focus();
+            }
+        }
+        cancelBtn.addEventListener('click', () => close(null));
+        confirmBtn.addEventListener('click', () => close(input.value));
+        backdrop.addEventListener('click', e => { if (e.target === backdrop) close(null); });
+        document.addEventListener('keydown', onKey);
+    });
+}
 async function startOAuth(hint) {
     const r = await fetch('/accounts/add', {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
         body:'action=start'});
     const d = await r.json();
-    const msg = document.getElementById('add-msg');
-    if (!r.ok) { msg.textContent = 'Error: ' + (d.error || r.status); return; }
-    msg.textContent = hint || '';
+    if (!r.ok) { showToast('Error: ' + (d.error || r.status), 'err'); return; }
+    if (hint) showToast(hint, 'info', {sticky: true});   // re-auth guidance stays until the next toast replaces it
     authUrl = d.authorize_url;
     document.getElementById('auth-link').href = authUrl;
-    document.getElementById('auth-actions').hidden = false;
-    document.getElementById('oauth-step2').hidden = false;
+    document.getElementById('oauth-step2').hidden = false;   // step 2: open & copy
+    document.getElementById('oauth-step3').hidden = false;   // step 3: paste
+    // Step 1 is done — relabel it (stays ghost) so it now reads as "mint a fresh link".
+    document.getElementById('start-btn').textContent = 'Regenerate link';
 }
 async function copyAuthUrl() {
     if (!authUrl) return;
-    const msg = document.getElementById('add-msg');
     try {
         await navigator.clipboard.writeText(authUrl);
-        msg.textContent = 'Authorization URL copied to clipboard.';
+        showToast('Authorization URL copied to clipboard.', 'ok');
     } catch (e) {
         // clipboard API needs HTTPS/permission; fall back to selecting a temp field
         const ta = document.createElement('textarea');
         ta.value = authUrl; document.body.appendChild(ta); ta.select();
-        try { document.execCommand('copy'); msg.textContent = 'Authorization URL copied to clipboard.'; }
-        catch (_) { msg.textContent = 'Copy failed — use the "Open authorization page" link.'; }
+        try { document.execCommand('copy'); showToast('Authorization URL copied to clipboard.', 'ok'); }
+        catch (_) { showToast('Copy failed — use the "Open authorization page" link.', 'err'); }
         ta.remove();
     }
 }
@@ -212,10 +292,12 @@ async function completeOAuth() {
     const r = await fetch('/accounts/add', {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
     const d = await r.json();
-    const msg = document.getElementById('add-msg');
-    if (r.ok) { msg.textContent = `Added ${d.email} (${d.account_type}), attached ${d.backfilled} legacy snapshots.`;
-        setTimeout(()=>location.reload(), 1200); }
-    else { msg.textContent = 'Error: ' + (d.error || r.status); }
+    if (r.ok) {
+        showToast(`Added ${d.email} (${d.account_type}), attached ${d.backfilled} legacy snapshots.`, 'ok');
+        setTimeout(()=>location.reload(), 1600);   // let the success toast read before the list refreshes
+    } else {
+        showToast('Error: ' + (d.error || r.status), 'err');
+    }
 }
 async function op(id, name) {
     await fetch(`/accounts/${id}/${name}`, {method:'POST'});
@@ -252,18 +334,29 @@ async function delAcc(id) {
     await fetch(`/accounts/${id}/delete`, {method:'POST'});
     location.reload();
 }
-async function renameAcc(id) {
-    const label = prompt('New account label:');
-    if (!label) return;
+async function renameAcc(id, current = '') {
+    const label = await promptDialog({
+        title: 'Rename account', label: 'New account label',
+        value: current, placeholder: 'Account label',
+        confirmLabel: 'Save', cancelLabel: 'Cancel'
+    });
+    if (label === null) return;                 // cancelled
+    const trimmed = label.trim();
+    if (!trimmed || trimmed === current) return; // empty or unchanged → no-op
     await fetch(`/accounts/${id}/rename`, {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:new URLSearchParams({label})});
+        body:new URLSearchParams({label: trimmed})});
     location.reload();
 }
 // Wire re-auth buttons via data-email (read with dataset, never inlined into a
 // JS string) so an email can't break out of an inline handler and execute.
 document.querySelectorAll('.reauth').forEach(btn => {
     btn.addEventListener('click', () => reauth(btn.dataset.email));
+});
+// Rename via data-id/data-label (read with dataset, never inlined) so a label can't
+// break out of an inline handler; the current label pre-fills the prompt modal.
+document.querySelectorAll('.rename-btn').forEach(btn => {
+    btn.addEventListener('click', () => renameAcc(btn.dataset.id, btn.dataset.label));
 });
 </script>
 </body>

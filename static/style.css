@@ -202,29 +202,31 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .acc-error{font-family:var(--mono);font-size:.7rem;color:var(--warn);cursor:help}
 .acc-empty{color:var(--label);font-family:var(--mono);font-size:.8rem;padding:14px 0}
 .acc-actions{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
-.acc-actions button{font-family:var(--mono);font-size:.72rem;padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--mid);cursor:pointer;transition:all .15s}
+.acc-actions button{font-family:var(--mono);font-size:.72rem;padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:rgba(255,255,255,.045);color:var(--mid);cursor:pointer;transition:all .15s}
 .acc-actions button:hover{border-color:var(--accent-border);color:var(--accent)}
 .acc-actions button.danger:hover{border-color:rgba(244,63,94,.4);color:var(--crit)}
 
 /* Add-account flow */
-.add-account{padding:16px}
-.add-step{display:flex;gap:14px;padding:10px 0}
+/* Add account — guided step cards (matches the card-on-bg aesthetic used across the app) */
+.accounts-page .add-account{background:transparent;padding:0;display:flex;flex-direction:column;gap:12px}
+.add-step{display:flex;flex-direction:column;gap:13px;padding:16px 18px;background:var(--panel);border:1px solid var(--border);border-radius:11px;transition:border-color .15s}
+.add-step:focus-within{border-color:var(--accent-border)}
 .add-step[hidden]{display:none}
+/* Header row: number + title on one line. Content sits below, indented under the title. */
+.step-head{display:flex;align-items:center;gap:12px}
 .step-no{font-family:var(--mono);font-weight:700;font-size:.78rem;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-border);width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none}
-.step-body{display:flex;flex-direction:column;gap:10px;min-width:0;flex:1}
-.step-body p{color:var(--mid);font-size:.85rem}
-.btn-accent{font-family:var(--mono);align-self:flex-start;padding:8px 16px;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s;color:var(--accent);border:1px solid var(--accent-border);background:var(--accent-soft);white-space:nowrap}
-.btn-accent:hover{background:rgba(34,211,238,.18)}
-.auth-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.auth-actions[hidden]{display:none}
-.auth-link{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent-border)}
-.auth-link:hover{border-bottom-style:solid}
-.btn-ghost{font-family:var(--mono);font-size:.74rem;padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--mid);cursor:pointer;transition:all .15s}
+.step-title{color:var(--text);font-size:.88rem;font-weight:500;line-height:1.4;min-width:0}
+.step-content{padding-left:38px}
+.step-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.btn-ghost{font-family:var(--mono);font-size:.74rem;padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:rgba(255,255,255,.045);color:var(--mid);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap}
 .btn-ghost:hover{border-color:var(--accent-border);color:var(--accent)}
-.add-form{display:flex;gap:8px;flex-wrap:wrap}
-.add-form input{flex:1 1 220px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);font-family:var(--mono);font-size:.8rem}
+.add-form{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.add-form input{padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);font-family:var(--mono);font-size:.8rem;transition:border-color .15s}
+.add-form input::placeholder{color:var(--label)}
+.add-form .code-input{flex:2 1 260px}
+.add-form .label-input{flex:1 1 150px}
 .add-form input:focus{outline:none;border-color:var(--accent)}
-.add-msg{font-family:var(--mono);font-size:.78rem;color:var(--mid);padding:4px 0 8px;min-height:1.2em}
+.add-form button{align-self:stretch}
 
 @media(max-width:600px){
   /* Fixed grid instead of flex-wrap: dot | label+email | type badge, then the
@@ -235,6 +237,10 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
   .acc-error{grid-column:2/-1}
   .acc-actions{grid-column:1/-1;margin-left:0;display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
   .acc-actions button{padding:9px 6px}
+  /* Add account: stack the code/label fields and the button full-width.
+     Reset the desktop flex-basis — in a column it would inflate input height. */
+  .add-form{flex-direction:column;align-items:stretch}
+  .add-form .code-input,.add-form .label-input{flex:0 0 auto}
 }
 
 /* Toast notifications (transient action feedback; replaces the in-flow status line) */
@@ -257,6 +263,10 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .modal-backdrop.show .modal{transform:none}
 .modal h3{font-family:var(--mono);font-size:.92rem;font-weight:600;color:var(--text);margin-bottom:10px}
 .modal p{font-family:var(--mono);font-size:.82rem;line-height:1.5;color:var(--mid);margin-bottom:22px}
+/* Prompt-modal text field (promptDialog — replaces native prompt()) */
+.modal-label{display:block;font-family:var(--mono);font-size:.72rem;letter-spacing:.04em;color:var(--label);margin-bottom:8px}
+.modal-input{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);font-family:var(--mono);font-size:.82rem;margin-bottom:22px;transition:border-color .15s}
+.modal-input:focus{outline:none;border-color:var(--accent)}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end}
 .modal-actions button{font-family:var(--mono);font-size:.8rem;padding:9px 18px;border-radius:7px;cursor:pointer;transition:all .15s;border:1px solid var(--border)}
 .modal-btn-cancel{background:transparent;color:var(--mid)}
