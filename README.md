@@ -277,6 +277,8 @@ account bar on the dashboard switches between them. Each row has a **Refresh
 session** button that re-runs this flow to repair an account whose token was revoked
 (it matches by e-mail, so history is kept). Multi-account support requires v1.3.0+.
 
+- **Start 5h window** — per-account button on the Accounts page sends a minimal message to Haiku to anchor the start of the 5-hour usage window (skips if a window is already active).
+
 > The OAuth token endpoint is fronted by Cloudflare and is sensitive to the
 > `User-Agent`; the app already sends the value that works. If a code exchange
 > returns 403/429, wait a few minutes and retry — repeated failed attempts extend
