@@ -245,6 +245,26 @@ def calculate_prediction(history, limit_type='weekly'):
     if len(times) < 2:
         return None
 
+    # Within a single period usage only ever climbs (you spend tokens, you don't
+    # earn them back), so a large downward step marks a reset/refund. The nasty
+    # case is a mid-period "gift": Anthropic zeroes usage but keeps the SAME
+    # resets_at, so is_same_period() can't separate the high pre-gift points from
+    # the low post-gift ones (only the NULL-reset gap between them is filtered).
+    # Regressing across that 86%->7% step yields a bogus negative slope that
+    # extrapolates to a nonsense "at reset" (e.g. -142%). Keep only the data after
+    # the last such drop so the trend reflects the live (post-gift) period.
+    RESET_DROP_THRESHOLD = 5.0  # percentage points
+    last_drop = 0
+    for i in range(1, len(usages)):
+        if usages[i] < usages[i - 1] - RESET_DROP_THRESHOLD:
+            last_drop = i
+    if last_drop > 0:
+        times = times[last_drop:]
+        usages = usages[last_drop:]
+
+    if len(times) < 2:
+        return None
+
     # Linear regression
     times = np.array(times)
     usages = np.array(usages)
@@ -310,7 +330,7 @@ def calculate_prediction(history, limit_type='weekly'):
 
     return {
         'current_usage': float(round(current_usage, 2)),
-        'predicted_at_reset': float(round(min(predicted_usage, 100), 2)) if not low_confidence else None,
+        'predicted_at_reset': float(round(max(0.0, min(predicted_usage, 100)), 2)) if not low_confidence else None,
         'will_exceed': will_exceed,
         'trend_per_hour': float(round(trend_per_hour, 2)) if not low_confidence else None,
         'hours_to_100': float(round(hours_to_100, 3)) if hours_to_100 and not low_confidence else None,

@@ -75,3 +75,59 @@ def test_null_resets_still_used_when_no_current_period_known():
     pred = app.calculate_prediction(history, 'session')
     assert pred is not None
     assert pred['data_points'] == 3
+
+
+def _weekly_record(ts, used_pct, resets_at):
+    return {
+        'timestamp': _iso(ts),
+        'limits': {
+            'weekly': {
+                'percent_remaining': 100 - used_pct,
+                'resets_at': _iso(resets_at) if resets_at else None,
+            },
+        },
+    }
+
+
+def _history_with_midperiod_gift(now):
+    """Real prod shape (2026-06-13): a mid-period "gift" zeroes weekly usage but
+    keeps the SAME resets_at. Pre-gift points sit at ~86%, a NULL-reset gap, then
+    post-gift points flat at ~7% — all sharing one resets_at ~37h out. The 86%->7%
+    step across the same period is what makes the naive regression slope steeply
+    negative and extrapolate to a nonsense negative "at reset"."""
+    reset_at = now + timedelta(hours=37)
+    history = []
+    # Pre-gift tail still inside the 24h window: flat 86%.
+    t = now - timedelta(hours=23)
+    while t < now - timedelta(hours=22):
+        history.append(_weekly_record(t, 86.0, reset_at))
+        t += timedelta(minutes=5)
+    # The gift itself: usage zeroed, no active window reported.
+    while t < now - timedelta(hours=20):
+        history.append(_weekly_record(t, 0.0, None))
+        t += timedelta(minutes=5)
+    # Post-gift: same resets_at, usage resumed and flat at 7%.
+    while t <= now:
+        history.append(_weekly_record(t, 7.0, reset_at))
+        t += timedelta(minutes=5)
+    return history
+
+
+def test_midperiod_gift_does_not_predict_negative_usage():
+    """The 86%->7% drop must not extrapolate below 0 ("At reset: -142%")."""
+    now = datetime.now(timezone.utc)
+    pred = app.calculate_prediction(_history_with_midperiod_gift(now), 'weekly')
+    assert pred is not None
+    assert pred['predicted_at_reset'] >= 0, pred['predicted_at_reset']
+
+
+def test_midperiod_gift_trend_reflects_post_gift_period():
+    """Regression must drop everything up to the last reset/refund step, so the
+    trend reflects the flat post-gift period (~0%/h), not the bogus -3.9%/h."""
+    now = datetime.now(timezone.utc)
+    pred = app.calculate_prediction(_history_with_midperiod_gift(now), 'weekly')
+    assert pred is not None
+    assert abs(pred['trend_per_hour']) < 1.0, pred['trend_per_hour']
+    assert pred['will_exceed'] is False
+    # Current usage is read from the live (post-gift) tail, not the 86% pre-gift.
+    assert pred['current_usage'] == 7.0, pred['current_usage']
