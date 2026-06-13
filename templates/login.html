@@ -5,14 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0a0e12">
     <title>Login - Claude Usage Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="login-page">
     <div class="login-container">
+        <h1 class="brand-login">
+            <span class="brand-chip">
+                <svg class="brand-ico" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+                    <polyline points="9,11 15,16 9,21" fill="none" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    <rect x="16.5" y="20" width="7" height="2.6" rx="1.3" fill="#22d3ee"/>
+                </svg>
+                Claude Usage Dashboard
+            </span>
+        </h1>
         <div class="login-box">
-            <h1>Claude Dashboard</h1>
-            <p class="subtitle">Subscription Usage Monitoring</p>
-
             {% if error %}
             <div class="error-message">{{ error }}</div>
             {% endif %}

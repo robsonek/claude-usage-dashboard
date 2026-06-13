@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0a0e12">
     <title>Claude Usage Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <!-- Vendored locally (pinned Chart.js 4.4.6 + adapter 3.0.0): no third-party
          CDN dependency at runtime, so a compromised CDN can't inject script into
@@ -15,7 +16,16 @@
 <body>
     <div class="dashboard">
         <header>
-            <h1>Claude Usage Dashboard <span class="version-badge" title="App version">v{{ version }}</span></h1>
+            <h1 class="brand">
+                <span class="brand-chip">
+                    <svg class="brand-ico" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+                        <polyline points="9,11 15,16 9,21" fill="none" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        <rect x="16.5" y="20" width="7" height="2.6" rx="1.3" fill="#22d3ee"/>
+                    </svg>
+                    Claude Usage Dashboard
+                </span>
+                <span class="version-badge" title="App version">v{{ version }}</span>
+            </h1>
             <div class="header-actions">
                 <span class="freshness" id="freshness" title="Age of last snapshot">
                     <span class="fresh-dot" id="fresh-dot"></span>

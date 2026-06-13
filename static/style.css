@@ -4,7 +4,7 @@
   --panel:#0f161d;
   --panel-2:#0a1018;
   --border:#15202b;
-  --text:#e8f0f5;
+  --text:#cfd3d6;
   --mid:#8499ab;
   --label:#5b7083;
   --accent:#22d3ee;
@@ -41,6 +41,10 @@ body{
 /* Header */
 header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;padding-bottom:16px}
 header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em}
+/* Brand lockup: favicon glyph + full app name in a pill (mirrors the favicon tab chip) */
+.brand{display:flex;align-items:center;gap:10px}
+.brand-chip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:6px 13px;font-size:.78rem;font-weight:600;color:var(--text)}
+.brand-ico{width:15px;height:15px;flex:none}
 .header-actions{display:flex;gap:10px;align-items:center}
 
 /* Freshness indicator */
@@ -127,7 +131,10 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .login-container{width:100%;max-width:420px;padding:20px}
 .login-box{background:var(--panel);border-radius:12px;padding:36px;border:1px solid var(--border)}
 .login-box h1{text-align:center;margin-bottom:8px;font-size:1.4rem}
-.login-box .subtitle{text-align:center;color:var(--label);margin-bottom:28px;font-family:var(--mono);font-size:.8rem}
+/* Brand pill as the login hero: centered above the form card (panel fill reads on the page bg) */
+.brand-login{display:flex;justify-content:center;margin-bottom:18px}
+.brand-login .brand-chip{font-size:.92rem;padding:8px 15px;gap:9px}
+.brand-login .brand-ico{width:18px;height:18px}
 .form-group{margin-bottom:18px}
 .form-group label{display:block;margin-bottom:8px;color:var(--mid);font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
 .form-group input{width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2);color:var(--text);font-size:.95rem;transition:border-color .2s}
