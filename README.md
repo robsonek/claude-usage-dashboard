@@ -266,9 +266,9 @@ database (Fernet), so `TOKEN_ENCRYPTION_KEY` must be set in `.env` first (see
 [Configuration](#configuration)).
 
 1. Open the dashboard, log in, and go to the **Accounts** page.
-2. Click **Start authorization**. Open the generated authorize link (or use
-   **Copy URL** to open it on another device / in a browser already signed into
-   the right Claude account) and approve access.
+2. Click **Generate link**, then **Open authorization page** (or use **Copy URL**
+   to open it on another device / in a browser already signed into the right
+   Claude account) and approve access.
 3. Claude shows a `code#state` string — paste it back on the **Accounts** page and
    click **Add account**.
 
