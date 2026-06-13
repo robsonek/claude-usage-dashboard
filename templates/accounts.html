@@ -44,7 +44,6 @@
         <p class="acc-empty">No accounts — add your first account below.</p>
         {% endfor %}
     </section>
-    <p id="acc-msg" class="add-msg" role="status"></p>
 
     <p class="section-label">Add account</p>
     <section class="accounts-panel add-account">
@@ -73,8 +72,102 @@
         <p id="add-msg" class="add-msg" role="status"></p>
     </section>
 </div>
+<div id="toast-host" class="toast-host" role="status" aria-live="polite"></div>
 <script>
 let authUrl = null;
+
+// --- Toast + modal helpers (on-theme replacements for the in-flow text line and
+// the native confirm()). Toast text is always set via textContent (no injection). ---
+const TOAST_ICONS = {ok: '✓', info: 'ⓘ', err: '✕'};
+let _toastTimer = null;
+function showToast(message, variant = 'info', opts = {}) {
+    const host = document.getElementById('toast-host');
+    host.innerHTML = '';
+    clearTimeout(_toastTimer);
+    const el = document.createElement('div');
+    el.className = `toast ${variant}`;
+    const ico = document.createElement('span');
+    ico.className = 't-ico';
+    ico.setAttribute('aria-hidden', 'true');   // .t-msg already carries the meaning
+    if (variant === 'load') { const s = document.createElement('span'); s.className = 'spinner'; ico.appendChild(s); }
+    else { ico.textContent = TOAST_ICONS[variant] || ''; }
+    const msg = document.createElement('span');
+    msg.className = 't-msg';
+    msg.textContent = message;
+    el.append(ico, msg);
+    el.addEventListener('click', () => dismissToast(el));
+    host.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    const ttl = opts.sticky ? 0 : (variant === 'err' ? 7000 : 4500);
+    if (ttl) _toastTimer = setTimeout(() => dismissToast(el), ttl);
+    return el;
+}
+function dismissToast(el) {
+    if (!el || !el.isConnected) return;
+    el.classList.remove('show');
+    const done = () => el.remove();           // remove() is idempotent
+    el.addEventListener('transitionend', done, {once: true});
+    setTimeout(done, 300);                    // fallback if transitionend never fires (reduced-motion / detached)
+}
+let _modalUid = 0;
+function confirmDialog({title, body, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false}) {
+    // Re-entry guard: a second dialog (double-click / another row) would stack
+    // backdrops and document keydown listeners. One at a time.
+    if (document.querySelector('.modal-backdrop')) return Promise.resolve(false);
+    return new Promise(resolve => {
+        const trigger = document.activeElement;
+        const main = document.querySelector('.dashboard');
+        const uid = `modal-${++_modalUid}`;
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML = `
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="${uid}-title" aria-describedby="${uid}-body">
+                <h3 id="${uid}-title"></h3>
+                <p id="${uid}-body"></p>
+                <div class="modal-actions">
+                    <button type="button" class="modal-btn-cancel"></button>
+                    <button type="button" class="modal-btn-confirm${danger ? ' danger' : ''}"></button>
+                </div>
+            </div>`;
+        backdrop.querySelector(`#${uid}-title`).textContent = title;
+        backdrop.querySelector(`#${uid}-body`).textContent = body;
+        const cancelBtn = backdrop.querySelector('.modal-btn-cancel');
+        const confirmBtn = backdrop.querySelector('.modal-btn-confirm');
+        cancelBtn.textContent = cancelLabel;
+        confirmBtn.textContent = confirmLabel;
+        if (main) main.inert = true;                 // hide background from AT + tab order
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add('show'));
+        confirmBtn.focus();
+        let done = false;
+        function close(result) {
+            if (done) return;                        // idempotent
+            done = true;
+            document.removeEventListener('keydown', onKey);
+            if (main) main.inert = false;            // restore before focusing the trigger
+            backdrop.classList.remove('show');
+            const rm = () => backdrop.remove();
+            backdrop.addEventListener('transitionend', rm, {once: true});
+            setTimeout(rm, 300);                     // fallback when transition is suppressed
+            if (trigger && trigger.focus) trigger.focus();
+            resolve(result);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); close(false); }
+            // Enter is intentionally NOT bound to confirm: a focused button activates
+            // natively on Enter/Space, so Enter-on-Cancel cancels (critical for Delete).
+            else if (e.key === 'Tab') {
+                e.preventDefault();
+                if (!backdrop.contains(document.activeElement)) { confirmBtn.focus(); return; }
+                (document.activeElement === confirmBtn ? cancelBtn : confirmBtn).focus();
+            }
+        }
+        cancelBtn.addEventListener('click', () => close(false));
+        confirmBtn.addEventListener('click', () => close(true));
+        backdrop.addEventListener('click', e => { if (e.target === backdrop) close(false); });
+        document.addEventListener('keydown', onKey);
+    });
+}
 async function startOAuth(hint) {
     const r = await fetch('/accounts/add', {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -129,25 +222,33 @@ async function op(id, name) {
     location.reload();
 }
 async function startSession(id) {
-    if (!confirm('Start a fresh 5h window for this account? (sends a tiny "Hi" to Haiku)')) return;
-    const msg = document.getElementById('acc-msg');
-    msg.textContent = 'Starting 5h window…';
+    const ok = await confirmDialog({
+        title: 'Start a fresh 5h window?',
+        body: 'Sends a tiny "Hi" to Haiku to anchor the start of this account\'s 5-hour usage window.',
+        confirmLabel: 'Start 5h', cancelLabel: 'Cancel'
+    });
+    if (!ok) return;
+    showToast('Starting 5h window…', 'load', {sticky: true});
     try {
         const r = await fetch(`/accounts/${id}/start_session`, {method: 'POST'});
         const d = await r.json();
-        if (!r.ok) { msg.textContent = 'Error: ' + (d.error || r.status); return; }
+        if (!r.ok) { showToast(d.error || `Error ${r.status}`, 'err'); return; }
         const reset = d.resets_at
             ? new Date(d.resets_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
             : 'unknown';
-        msg.textContent = d.started
-            ? `5h window started — resets at ${reset}.`
-            : `Window already active — resets at ${reset}.`;
+        if (d.started) showToast(`5h window started — resets at ${reset}.`, 'ok');
+        else showToast(`Window already active — resets at ${reset}.`, 'info');
     } catch (e) {
-        msg.textContent = 'Error: ' + e;
+        showToast('Error: ' + e, 'err');
     }
 }
 async function delAcc(id) {
-    if (!confirm('Delete this account? Its snapshot history will be kept.')) return;
+    const ok = await confirmDialog({
+        title: 'Delete this account?',
+        body: 'The account is removed but its snapshot history is kept.',
+        confirmLabel: 'Delete', cancelLabel: 'Cancel', danger: true
+    });
+    if (!ok) return;
     await fetch(`/accounts/${id}/delete`, {method:'POST'});
     location.reload();
 }
