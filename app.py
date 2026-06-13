@@ -11,6 +11,8 @@ from werkzeug.security import check_password_hash
 
 import config
 import oauth_flow
+import api_usage_fetcher as auf
+import primer
 from database import UsageDatabase
 
 app = Flask(__name__)
@@ -491,6 +493,18 @@ def accounts_op(account_id, op):
         if not label:
             return jsonify({'error': 'Empty label.'}), 400
         db.rename_account(account_id, label)
+    elif op == 'start_session':
+        account = db.get_account_for_primer(account_id)
+        if account is None:
+            return jsonify({'error': 'No such account.'}), 404
+        try:
+            result = primer.prime_account(db, account)
+        except auf.UsageApiError as e:
+            return jsonify({'error': f'Could not start session: {e}'}), 502
+        except Exception as e:  # noqa: BLE001 — surface a clean 500, never a token
+            return jsonify({'error': f'Unexpected error: {type(e).__name__}'}), 500
+        return jsonify({'ok': True, 'started': result['started'],
+                        'resets_at': result['resets_at']})
     else:
         return jsonify({'error': 'unknown op'}), 400
     return jsonify({'ok': True})
