@@ -117,3 +117,22 @@ def test_prime_retries_primer_after_401(db, monkeypatch):
     assert result['started'] is True
     assert primer_n['n'] == 2                              # retried after refresh
     assert db.get_account_for_primer(a)['access_token'] == 'AT2'  # rotated token persisted
+
+
+def test_prime_returns_started_even_if_postsend_read_fails(db, monkeypatch):
+    a = _add(db)
+    account = db.get_account_for_primer(a)
+    usage_n = {'n': 0}
+
+    def usage(token):
+        usage_n['n'] += 1
+        if usage_n['n'] == 1:
+            return _sample(PAST)                         # guard: inactive -> proceed to send
+        raise primer.auf.UsageApiError('post-send read boom')  # post-send GET fails
+
+    monkeypatch.setattr(primer.auf, '_http_get_usage', usage)
+    monkeypatch.setattr(primer.auf, 'send_haiku_primer', lambda token, model=None: {'id': 'm'})
+
+    result = primer.prime_account(db, account)
+    assert result['started'] is True       # send succeeded -> started, despite read failure
+    assert result['resets_at'] is None     # no post-send usage to report

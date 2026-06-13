@@ -72,6 +72,21 @@ def test_start_session_api_error_maps_502(client, monkeypatch):
     assert 'error' in r.get_json()
 
 
+def test_start_session_unexpected_error_maps_500(client, monkeypatch):
+    a = _add(app_module._db)
+
+    def boom(db, account):
+        raise RuntimeError("secret-token-xyz must not leak")
+
+    monkeypatch.setattr(primer, 'prime_account', boom)
+    r = client.post(f'/accounts/{a}/start_session')
+    assert r.status_code == 500
+    body = r.get_json()
+    assert 'error' in body
+    assert 'secret-token-xyz' not in body['error']   # only the exception TYPE name, never the message
+    assert 'RuntimeError' in body['error']
+
+
 def test_start_session_requires_login(monkeypatch, tmp_path):
     monkeypatch.setattr(config, 'TOKEN_ENCRYPTION_KEY', Fernet.generate_key().decode())
     crypto_util._reset_cache()

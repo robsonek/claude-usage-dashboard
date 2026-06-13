@@ -36,7 +36,14 @@ def prime_account(db, account):
 
     account_session.call_with_401_retry(db, account, auf.send_haiku_primer)
 
-    api2 = account_session.call_with_401_retry(db, account, auf._http_get_usage)
-    db.insert_snapshot(auf.build_snapshot(api2, account))
-    db.record_account_poll(account['id'], error=None)
-    return {'started': True, 'resets_at': _session_status(api2)['resets_at']}
+    # The window is now started. The follow-up snapshot is best-effort: a failure to
+    # re-read usage must NOT turn a successful send into an error response.
+    resets_at = None
+    try:
+        api2 = account_session.call_with_401_retry(db, account, auf._http_get_usage)
+        db.insert_snapshot(auf.build_snapshot(api2, account))
+        db.record_account_poll(account['id'], error=None)
+        resets_at = _session_status(api2)['resets_at']
+    except auf.UsageApiError:
+        pass
+    return {'started': True, 'resets_at': resets_at}
