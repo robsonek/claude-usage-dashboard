@@ -43,14 +43,24 @@ REFRESH_MARGIN_MS = 120_000  # refresh when less than 2 min of token life left
 # Indirection so tests can stub HTTP without touching the network.
 _urlopen = urllib.request.urlopen
 
-# (api field, quota type, model) — model windows are mutually exclusive in the
-# API (the absent one is null), first non-null wins.
+# Legacy flat windows (pre-2026-06-30). Used as a fallback when the response has
+# no `limits` array. (api field, quota type, model) — model windows are mutually
+# exclusive in the legacy shape (the absent one is null), first non-null wins.
 WINDOW_MAP = [
     ('five_hour', 'session', ''),
     ('seven_day', 'weekly', ''),
     ('seven_day_sonnet', 'model_specific', 'sonnet'),
     ('seven_day_opus', 'model_specific', 'opus'),
 ]
+
+# The 2026-06-30 restructure (shipped with the new Sonnet) made `limits` the
+# canonical source: a list of {kind, group, percent, resets_at, is_active, ...}.
+# `percent` is utilization, so percent_remaining = 100 - percent. Session and the
+# all-models weekly cap are stable kinds; any other group=='weekly' entry is a
+# per-model window (kind like 'weekly_sonnet'/'weekly_opus') — mapped structurally
+# so a reintroduced per-model cap is picked up without a code change.
+_LIMIT_KIND_SESSION = 'session'
+_LIMIT_KIND_WEEKLY_ALL = 'weekly_all'
 
 
 class UsageApiError(Exception):
@@ -66,17 +76,73 @@ class UsageApiError(Exception):
         self.status = status
 
 
-def map_usage_response(api: Dict[str, Any],
-                       now: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """Map the oauth/usage JSON to the quota dicts usage_fetcher.py produces.
+def _make_quota(quota_type: str, model: str, percent_used: float,
+                resets_raw: Any, now: datetime) -> Dict[str, Any]:
+    """Build one quota dict. `percent_used` is utilization; a malformed resets_at
+    drops the reset fields but keeps the percentage (same degradation the PTY
+    parser had)."""
+    quota: Dict[str, Any] = {
+        'type': quota_type,
+        'percent_remaining': round(100.0 - float(percent_used), 3),
+    }
+    if model:
+        quota['model'] = model
+    if isinstance(resets_raw, str) and resets_raw:
+        try:
+            resets = datetime.fromisoformat(resets_raw.replace('Z', '+00:00'))
+            if resets.tzinfo is None:
+                resets = resets.replace(tzinfo=timezone.utc)
+            resets = resets.astimezone(timezone.utc)
+            quota['resets_at'] = resets.strftime('%Y-%m-%dT%H:%M:%SZ')
+            quota['time_remaining_seconds'] = max(
+                0, int((resets - now).total_seconds()))
+        except ValueError:
+            pass
+    return quota
 
-    Unknown windows and nulls are skipped; a malformed resets_at drops the reset
-    fields but keeps the percentage (same degradation the PTY parser has).
+
+def _map_from_limits(limits: List[Any], now: datetime) -> List[Dict[str, Any]]:
+    """Map the canonical `limits` array (2026-06-30+) to quota dicts.
+
+    session ← kind/group 'session'; weekly ← kind 'weekly_all'; model_specific ←
+    any other group=='weekly' entry (kind like 'weekly_sonnet'). The status card is
+    always Sonnet, so when several per-model entries exist Sonnet wins, else first.
     """
-    now = now or datetime.now(timezone.utc)
+    session: Optional[Dict[str, Any]] = None
+    weekly: Optional[Dict[str, Any]] = None
+    model_candidates: List[Dict[str, Any]] = []
+    for item in limits:
+        if not isinstance(item, dict):
+            continue
+        percent = item.get('percent')
+        if not isinstance(percent, (int, float)):
+            continue
+        kind = item.get('kind')
+        group = item.get('group')
+        resets_raw = item.get('resets_at')
+        if (group == 'session' or kind == _LIMIT_KIND_SESSION) and session is None:
+            session = _make_quota('session', '', percent, resets_raw, now)
+        elif kind == _LIMIT_KIND_WEEKLY_ALL and weekly is None:
+            weekly = _make_quota('weekly', '', percent, resets_raw, now)
+        elif group == 'weekly' and isinstance(kind, str):
+            model = kind[len('weekly_'):] if kind.startswith('weekly_') else kind
+            model_candidates.append(_make_quota('model_specific', model, percent, resets_raw, now))
+
+    quotas: List[Dict[str, Any]] = []
+    if session:
+        quotas.append(session)
+    if weekly:
+        quotas.append(weekly)
+    if model_candidates:
+        quotas.append(next((m for m in model_candidates if m.get('model') == 'sonnet'),
+                           model_candidates[0]))
+    return quotas
+
+
+def _map_from_flat_windows(api: Dict[str, Any], now: datetime) -> List[Dict[str, Any]]:
+    """Legacy fallback: map the flat top-level windows (WINDOW_MAP)."""
     quotas: List[Dict[str, Any]] = []
     have_model_quota = False
-
     for key, quota_type, model in WINDOW_MAP:
         window = api.get(key)
         if not isinstance(window, dict):
@@ -88,30 +154,27 @@ def map_usage_response(api: Dict[str, Any],
             if have_model_quota:
                 continue
             have_model_quota = True
-
-        quota: Dict[str, Any] = {
-            'type': quota_type,
-            'percent_remaining': round(100.0 - float(utilization), 3),
-        }
-        if model:
-            quota['model'] = model
-
-        resets_raw = window.get('resets_at')
-        if isinstance(resets_raw, str) and resets_raw:
-            try:
-                resets = datetime.fromisoformat(resets_raw.replace('Z', '+00:00'))
-                if resets.tzinfo is None:
-                    resets = resets.replace(tzinfo=timezone.utc)
-                resets = resets.astimezone(timezone.utc)
-                quota['resets_at'] = resets.strftime('%Y-%m-%dT%H:%M:%SZ')
-                quota['time_remaining_seconds'] = max(
-                    0, int((resets - now).total_seconds()))
-            except ValueError:
-                pass
-
-        quotas.append(quota)
-
+        quotas.append(_make_quota(quota_type, model, utilization,
+                                  window.get('resets_at'), now))
     return quotas
+
+
+def map_usage_response(api: Dict[str, Any],
+                       now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """Map the oauth/usage JSON to the quota dicts the dashboard stores.
+
+    Prefers the canonical `limits` array (2026-06-30+ shape); falls back to the
+    legacy flat windows when `limits` is absent/empty or doesn't yield the two
+    required windows. Unknown windows and nulls are skipped.
+    """
+    now = now or datetime.now(timezone.utc)
+    limits = api.get('limits')
+    if isinstance(limits, list) and limits:
+        quotas = _map_from_limits(limits, now)
+        types = {q['type'] for q in quotas}
+        if 'session' in types and 'weekly' in types:
+            return quotas
+    return _map_from_flat_windows(api, now)
 
 
 def needs_refresh_ms(expires_at_ms, now_ms=None) -> bool:

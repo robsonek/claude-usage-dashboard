@@ -97,6 +97,33 @@ def test_one_account_failing_does_not_block_others(db, tmp_path, monkeypatch):
     assert db.get_current(account_id=b) is not None
 
 
+def test_poll_captures_raw_response_to_raw_debug(db, tmp_path, monkeypatch):
+    """The collector persists one raw usage response per account per UTC day, so
+    the live API shape (e.g. a per-model window reappearing) is on disk for later
+    inspection without per-poll file churn."""
+    far = 9_999_999_999_999
+    a = _add(db, 'a@x.com', far)
+    monkeypatch.setattr(collect_all.auf, '_http_get_usage', lambda token: PROD_SAMPLE)
+    data_dir = tmp_path / 'data'
+    monkeypatch.setattr(collect_all, 'DATA_DIR', str(data_dir))
+    assert collect_all.run(db) == 0
+    files = list((data_dir / 'raw_debug').glob(f'usage-{a}-*.json'))
+    assert len(files) == 1, f"expected one raw capture, got {files}"
+    assert json.loads(files[0].read_text()) == PROD_SAMPLE
+
+
+def test_raw_capture_deduplicated_per_day(db, tmp_path, monkeypatch):
+    far = 9_999_999_999_999
+    a = _add(db, 'a@x.com', far)
+    monkeypatch.setattr(collect_all.auf, '_http_get_usage', lambda token: PROD_SAMPLE)
+    data_dir = tmp_path / 'data'
+    monkeypatch.setattr(collect_all, 'DATA_DIR', str(data_dir))
+    collect_all.run(db)
+    collect_all.run(db)  # same UTC day → no second file
+    files = list((data_dir / 'raw_debug').glob(f'usage-{a}-*.json'))
+    assert len(files) == 1, f"raw capture not deduplicated per day, got {files}"
+
+
 def test_no_accounts_returns_one(db, monkeypatch, tmp_path):
     monkeypatch.setattr(collect_all, 'DATA_DIR', str(tmp_path / 'data'))
     assert collect_all.run(db) == 1  # nothing to poll

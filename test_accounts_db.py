@@ -233,30 +233,31 @@ def test_fill_missing_quotas_isolated_per_account(db):
     b = _add(db, email='b@x.com')
     now = datetime.now(timezone.utc)
     reset = now + timedelta(days=4)
+    # Session reset a few hours out so the insert-time glitch sanitizer (5h period)
+    # leaves it alone and the carry-forward window guard treats it as in-period.
+    sess_reset = (now + timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-    def snap_with_model(acc, weekly_pct, model_pct, captured):
+    def snap_with_session(acc, weekly_pct, session_pct, captured):
         s = SNAP(acc, weekly_pct, captured=captured, resets=reset)
-        if model_pct is not None:
+        if session_pct is not None:
             s['quotas'].append({
-                'type': 'model_specific', 'model': 'sonnet',
-                'percent_remaining': model_pct,
-                'resets_at': reset.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                'time_remaining_seconds': 100,
+                'type': 'session', 'percent_remaining': session_pct,
+                'resets_at': sess_reset, 'time_remaining_seconds': 100,
             })
         return s
 
-    # Earlier A snapshot has model_specific=70; B snapshot has model_specific=99.
-    db.insert_snapshot(dict(snap_with_model(a, 50, 70, now), email='a@x.com'))
-    db.insert_snapshot(dict(snap_with_model(b, 60, 99, now + timedelta(minutes=1)),
+    # Earlier A snapshot has session=70; B snapshot has session=99.
+    db.insert_snapshot(dict(snap_with_session(a, 50, 70, now), email='a@x.com'))
+    db.insert_snapshot(dict(snap_with_session(b, 60, 99, now + timedelta(minutes=1)),
                             email='b@x.com'))
-    # A's LATEST snapshot drops model_specific entirely.
-    db.insert_snapshot(dict(snap_with_model(a, 45, None, now + timedelta(minutes=2)),
+    # A's LATEST snapshot drops session entirely.
+    db.insert_snapshot(dict(snap_with_session(a, 45, None, now + timedelta(minutes=2)),
                             email='a@x.com'))
 
     cur_a = db.get_current(account_id=a)
-    ms = cur_a['limits']['model_specific']
-    assert ms['stale'] is True
-    assert ms['percent_remaining'] == 70  # from A's earlier row, not B's 99
+    s = cur_a['limits']['session']
+    assert s['stale'] is True
+    assert s['percent_remaining'] == 70  # from A's earlier row, not B's 99
 
 
 def test_backfill_account_by_email_targets_only_null_matching(db):

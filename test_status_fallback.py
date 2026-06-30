@@ -39,24 +39,46 @@ def _db():
     return UsageDatabase(path), path
 
 
-def test_missing_sonnet_carries_previous_value_tagged_stale():
+def test_missing_session_carries_previous_value_tagged_stale():
     db, path = _db()
     try:
         db.insert_snapshot(_snap("2026-06-05T12:00:00+00:00",
                                  weekly=40.0, session=77.0, sonnet=95.0))
-        # Latest reading dropped the Sonnet row (the reported glitch).
+        # Latest reading dropped the session row (a partial/glitched read).
+        db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00",
+                                 weekly=40.0, sonnet=95.0))
+
+        limits = db.get_current()["limits"]
+        assert "session" in limits, "missing quota was not filled from history"
+        s = limits["session"]
+        assert s["percent_remaining"] == 77.0, "did not carry the previous session value"
+        assert s.get("stale") is True, "carried value not tagged stale"
+        assert (s.get("stale_since") or "").startswith("2026-06-05T12:00:00"), \
+            f"stale_since should point at the source reading, got {s.get('stale_since')}"
+        # Fresh quotas are NOT tagged stale.
+        assert "stale" not in limits["weekly"]
+    finally:
+        db.close()
+        os.unlink(path)
+
+
+def test_missing_model_specific_is_not_carried_forward():
+    """Post-2026-06-30 the usage API stopped emitting a per-model window unless one
+    is active, so an absent model_specific means "no per-model limit" — NOT a
+    glitched read. Carrying the last value forward for hours/days would mislabel
+    that as a stale reading, so model_specific is no longer carried forward. (The
+    PTY scraper that produced partial renders was removed in v1.2.0.)"""
+    db, path = _db()
+    try:
+        db.insert_snapshot(_snap("2026-06-05T12:00:00+00:00",
+                                 weekly=40.0, session=77.0, sonnet=95.0))
         db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00",
                                  weekly=40.0, session=77.0))
 
         limits = db.get_current()["limits"]
-        assert "model_specific" in limits, "missing quota was not filled from history"
-        m = limits["model_specific"]
-        assert m["percent_remaining"] == 95.0, "did not carry the previous Sonnet value"
-        assert m["model"] == "sonnet"
-        assert m.get("stale") is True, "carried value not tagged stale"
-        assert (m.get("stale_since") or "").startswith("2026-06-05T12:00:00"), \
-            f"stale_since should point at the source reading, got {m.get('stale_since')}"
-        # Fresh quotas are NOT tagged stale.
+        assert "model_specific" not in limits, \
+            "absent per-model window was carried forward as a stale value"
+        # session/weekly are unaffected (still carried when genuinely missing).
         assert "stale" not in limits["weekly"]
         assert "stale" not in limits["session"]
     finally:
@@ -73,9 +95,11 @@ def test_empty_latest_snapshot_falls_back_for_all_quotas():
         db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00"))
 
         limits = db.get_current()["limits"]
-        for k in ("weekly", "session", "model_specific"):
+        for k in ("weekly", "session"):
             assert k in limits, f"{k} not carried forward on an empty snapshot"
             assert limits[k].get("stale") is True, f"{k} not tagged stale"
+        # model_specific is no longer carried forward (absent = no per-model limit).
+        assert "model_specific" not in limits
     finally:
         db.close()
         os.unlink(path)
@@ -87,10 +111,10 @@ def test_fallback_does_not_write_synthetic_rows():
         db.insert_snapshot(_snap("2026-06-05T12:00:00+00:00",
                                  weekly=40.0, session=77.0, sonnet=95.0))
         db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00",
-                                 weekly=40.0, session=77.0))
-        db.get_current()  # must be read-only w.r.t. the DB
+                                 weekly=40.0, sonnet=95.0))  # session dropped
+        db.get_current()  # carries session forward in-memory; must be read-only w.r.t. the DB
         n = db.conn.execute(
-            "SELECT COUNT(*) FROM quotas WHERE quota_type='model_specific'"
+            "SELECT COUNT(*) FROM quotas WHERE quota_type='session'"
         ).fetchone()[0]
         assert n == 1, f"get_current injected a synthetic quota row (found {n}, expected 1)"
     finally:
@@ -143,8 +167,6 @@ def test_expired_period_is_not_carried_forward():
                 # weekly/sonnet still in-period at glitch time → may carry.
                 {"type": "weekly", "model": None, "percent_remaining": 40.0,
                  "resets_at": "2026-06-07T10:00:00+00:00"},
-                {"type": "model_specific", "model": "sonnet", "percent_remaining": 95.0,
-                 "resets_at": "2026-06-07T10:00:00+00:00"},
             ],
         })
         # Fully-glitched read ~4 days later (≈19 session resets passed).
@@ -156,8 +178,6 @@ def test_expired_period_is_not_carried_forward():
             "expired session value was carried forward as if current"
         assert limits.get("weekly", {}).get("stale") is True, \
             "in-period weekly should still carry forward"
-        assert limits.get("model_specific", {}).get("stale") is True, \
-            "in-period sonnet should still carry forward"
     finally:
         db.close()
         os.unlink(path)
@@ -171,42 +191,14 @@ def test_same_timestamp_glitch_still_falls_back():
     try:
         db.insert_snapshot(_snap("2026-06-05T12:00:00+00:00",
                                  weekly=40.0, session=77.0, sonnet=95.0))
-        # Same second, but glitched (no Sonnet) and inserted second → higher id.
+        # Same second, but glitched (no session) and inserted second → higher id.
         db.insert_snapshot(_snap("2026-06-05T12:00:00+00:00",
-                                 weekly=40.0, session=77.0))
+                                 weekly=40.0, sonnet=95.0))
 
-        m = db.get_current()["limits"].get("model_specific")
-        assert m is not None, "same-second sibling was not used as fallback"
-        assert m["percent_remaining"] == 95.0
-        assert m.get("stale") is True
-    finally:
-        db.close()
-        os.unlink(path)
-
-
-def test_opus_row_is_not_carried_into_the_sonnet_card():
-    """If a prior snapshot holds both Opus and Sonnet model_specific rows, the
-    fallback must carry the Sonnet one (the status card is always Sonnet)."""
-    db, path = _db()
-    try:
-        db.insert_snapshot({
-            "captured_at": "2026-06-05T12:00:00+00:00", "account_type": "max",
-            "quotas": [
-                {"type": "weekly", "model": None, "percent_remaining": 40.0,
-                 "resets_at": _WEEKLY_RESET},
-                {"type": "model_specific", "model": "opus", "percent_remaining": 10.0,
-                 "resets_at": _SONNET_RESET},
-                {"type": "model_specific", "model": "sonnet", "percent_remaining": 95.0,
-                 "resets_at": _SONNET_RESET},
-            ],
-        })
-        db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00",
-                                 weekly=40.0, session=77.0))
-
-        m = db.get_current()["limits"]["model_specific"]
-        assert m["model"] == "sonnet", f"carried the wrong model: {m['model']}"
-        assert m["percent_remaining"] == 95.0
-        assert m.get("stale") is True
+        s = db.get_current()["limits"].get("session")
+        assert s is not None, "same-second sibling was not used as fallback"
+        assert s["percent_remaining"] == 77.0
+        assert s.get("stale") is True
     finally:
         db.close()
         os.unlink(path)
@@ -231,7 +223,7 @@ def test_api_current_passes_stale_keys_through():
     db = UsageDatabase(path)
     db.insert_snapshot(_snap("2026-06-05T12:00:00+00:00",
                              weekly=40.0, session=77.0, sonnet=95.0))
-    db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00", weekly=40.0, session=77.0))
+    db.insert_snapshot(_snap("2026-06-05T12:05:00+00:00", weekly=40.0, sonnet=95.0))
     db.close()
 
     app_module.app.config["TESTING"] = True
@@ -242,9 +234,9 @@ def test_api_current_passes_stale_keys_through():
         resp = client.get("/api/current")
         assert resp.status_code == 200, resp.status_code
         limits = resp.get_json()["limits"]
-        assert limits["model_specific"]["stale"] is True
-        assert limits["model_specific"].get("stale_since")
-        assert limits["model_specific"]["percent_remaining"] == 95.0
+        assert limits["session"]["stale"] is True
+        assert limits["session"].get("stale_since")
+        assert limits["session"]["percent_remaining"] == 77.0
         assert "stale" not in limits["weekly"]
     finally:
         if app_module._db:

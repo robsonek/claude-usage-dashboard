@@ -44,13 +44,18 @@ _RESET_EQUIVALENCE_SECONDS = 1800
 _RESETS_AHEAD_MARGIN_HOURS = 1
 
 # Quota types a complete reading always contains. When the latest snapshot is
-# missing one (a partial/glitched PTY render dropped the row — most often the
-# late-rendering Sonnet per-model quota), get_current() carries the most recent
-# earlier value forward and tags it stale=True, so the status card shows the
-# last known number with a marker instead of going blank. Only the /api/current
-# view falls back; get_history / predictions stay strictly truthful (no
-# synthetic rows are ever written to the DB).
-_FALLBACK_QUOTA_TYPES = ('weekly', 'session', 'model_specific')
+# missing one, get_current() carries the most recent earlier value forward and
+# tags it stale=True, so the status card shows the last known number with a marker
+# instead of going blank. Only the /api/current view falls back; get_history /
+# predictions stay strictly truthful (no synthetic rows are ever written).
+#
+# model_specific is deliberately NOT here: since the 2026-06-30 API restructure the
+# usage endpoint only emits a per-model window when one is active, so an absent
+# model_specific means "no per-model limit" — not a glitch. Carrying it forward for
+# hours/days would mislabel that as a stale reading. (The PTY scraper that produced
+# partial renders — the original reason model_specific was carried — left in v1.2.0;
+# on the API path build_snapshot guarantees session+weekly, so those rarely miss.)
+_FALLBACK_QUOTA_TYPES = ('weekly', 'session')
 
 
 class UsageDatabase:

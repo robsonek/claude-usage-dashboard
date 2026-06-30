@@ -41,6 +41,29 @@ def _write_backup(snapshot, account_id):
         _log(f'WARN: backup write failed for account {account_id}: {e}')
 
 
+def _capture_daily_raw(api, account_id):
+    """Persist one raw usage response per account per UTC day to data/raw_debug/.
+
+    Lets us inspect the live API shape as Anthropic evolves it — notably to map a
+    per-model (model_specific) window from real data if/when it reappears in the
+    `limits` array — without per-poll file churn. Best-effort: pruned by
+    cleanup_old_data retention (by mtime), and never raises into the poll path.
+    """
+    try:
+        raw_dir = os.path.join(DATA_DIR, 'raw_debug')
+        now = datetime.now(timezone.utc)
+        dest = os.path.join(raw_dir, f"usage-{account_id}-{now.strftime('%Y-%m-%d')}.json")
+        if os.path.exists(dest):
+            return  # already captured a sample for this account today
+        os.makedirs(raw_dir, exist_ok=True)
+        tmp = os.path.join(raw_dir, f".usage-{account_id}.{os.getpid()}.tmp")
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(api, f)
+        os.replace(tmp, dest)
+    except OSError as e:
+        _log(f'WARN: raw capture failed for account {account_id}: {e}')
+
+
 def _poll_one(db, account) -> bool:
     """Refresh-if-needed, fetch usage, insert snapshot. Returns True on success.
 
@@ -49,6 +72,7 @@ def _poll_one(db, account) -> bool:
     acc_id = account['id']
     try:
         api = account_session.call_with_401_retry(db, account, auf._http_get_usage)
+        _capture_daily_raw(api, acc_id)
         snapshot = auf.build_snapshot(api, account)
         db.insert_snapshot(snapshot)
         _write_backup(snapshot, acc_id)

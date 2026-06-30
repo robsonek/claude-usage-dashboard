@@ -12,7 +12,7 @@ def _read(rel):
 def test_css_has_new_tokens():
     css = _read("static/style.css")
     for token in ("--bg:", "--panel:", "--accent:", "--ok:", "--warn:",
-                  "--crit:", "--line-session:", "--line-sonnet:",
+                  "--crit:", "--line-session:",
                   "--reset-marker-color:", "--mono:"):
         assert token in css, f"missing token {token}"
 
@@ -40,24 +40,25 @@ def test_dashboard_has_freshness_indicator():
 
 def test_status_cards_have_value_and_trend_hooks():
     html = _read("templates/dashboard.html")
-    for hook in ('id="weekly-used"', 'id="session-used"', 'id="model-used"',
-                 'id="weekly-trend"', 'id="session-trend"', 'id="model-trend"',
-                 'id="card-weekly"', 'id="card-session"', 'id="card-model"'):
+    for hook in ('id="weekly-used"', 'id="session-used"',
+                 'id="weekly-trend"', 'id="session-trend"',
+                 'id="card-weekly"', 'id="card-session"'):
         assert hook in html, f"missing {hook}"
 
 
 def test_chart_colors_swapped_to_palette():
     html = _read("templates/dashboard.html")
     assert "#22d3ee" in html      # weekly line (cyan)
-    assert "#a78bfa" in html      # sonnet line (violet)
+    assert "#10b981" in html      # session line (green)
     assert "#3498db" not in html  # old blue removed
     assert "#9b59b6" not in html  # old purple removed
-    assert "Sonnet Usage (% used)" in html
+    # Per-model (Sonnet) chart removed after the 2026-06-30 API restructure.
+    assert "Sonnet Usage (% used)" not in html
 
 
 def test_status_cards_have_stale_value_markers():
     html = _read("templates/dashboard.html")
-    for hook in ('id="weekly-stale"', 'id="session-stale"', 'id="model-stale"',
+    for hook in ('id="weekly-stale"', 'id="session-stale"',
                  'setStaleBadge', 'is-stale', 'staleAge'):
         assert hook in html, f"missing {hook}"
     css = _read("static/style.css")
@@ -74,13 +75,13 @@ def test_apply_status_color_preserves_is_stale():
         "wholesale className reset would drop the is-stale class"
 
 
-def test_model_card_routed_through_setStatusCard_for_clearing():
-    """The model card must always go through setStatusCard (so a prior stale
-    marker is cleared when model_specific disappears), and setStatusCard must
-    clear the badge when q is falsy."""
+def test_setStatusCard_clears_stale_badge_when_quota_absent():
+    """When a quota is absent, setStatusCard resets the card to blanks and clears
+    any prior stale marker, rather than leaving a frozen value on screen across
+    refreshes."""
     html = _read("templates/dashboard.html")
-    assert "setStatusCard('model', limits.model_specific)" in html
     assert "setStaleBadge(prefix, null)" in html
+    assert "if (!q)" in html  # the blank-reset branch in setStatusCard
 
 
 def test_app_version_is_shown_in_ui():
