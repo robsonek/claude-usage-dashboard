@@ -403,7 +403,7 @@ def api_accounts():
     db = get_db()
     out = []
     for acc in db.list_accounts():
-        weekly = session_pct = model_pct = None
+        weekly = session_pct = model_pct = model_name = None
         weekly_reset = session_reset = model_reset = None
         weekly_start = session_start = model_start = None
         weekly_exceed = session_exceed = model_exceed = False
@@ -422,6 +422,7 @@ def api_accounts():
                 model_pct = mq.get('percent_remaining')
                 model_reset = mq.get('resets_at')
                 model_start = mq.get('period_start_at')
+                model_name = mq.get('model')
             # Same prediction the dashboard uses, so the mini-card color can match
             # the big STATUS card (a forecast overage escalates to amber even at low %).
             history = db.get_history(account_id=acc['id'],
@@ -430,7 +431,7 @@ def api_accounts():
             session_exceed = bool((calculate_prediction(history, 'session') or {}).get('will_exceed'))
             model_exceed = bool((calculate_prediction(history, 'model_specific') or {}).get('will_exceed'))
         out.append({**acc, 'weekly_remaining': weekly, 'session_remaining': session_pct,
-                    'model_remaining': model_pct,
+                    'model_remaining': model_pct, 'model_name': model_name,
                     'weekly_resets_at': weekly_reset, 'session_resets_at': session_reset,
                     'model_resets_at': model_reset,
                     'weekly_period_start': weekly_start, 'session_period_start': session_start,

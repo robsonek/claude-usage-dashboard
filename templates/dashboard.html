@@ -74,6 +74,21 @@
                     <span class="reset-time" id="session-reset">reset --</span>
                 </div>
             </div>
+
+            <div class="status-card" id="card-model">
+                <div class="status-head">
+                    <span class="status-name"><span class="dot"></span><span id="model-title">Model · 7d</span></span>
+                    <span class="status-trend" id="model-trend"></span>
+                </div>
+                <div class="status-value"><span id="model-used">--</span><span class="u">% used</span><span class="stale-badge" id="model-stale" hidden></span></div>
+                <div class="progress-container">
+                    <div class="progress-bar" id="model-progress"></div>
+                </div>
+                <div class="status-details">
+                    <span class="remaining" id="model-remaining">--</span>
+                    <span class="reset-time" id="model-reset">reset --</span>
+                </div>
+            </div>
         </section>
 
         <!-- Prediction panel -->
@@ -86,6 +101,10 @@
                 </div>
                 <div class="prediction-card" id="prediction-session">
                     <h4>Session</h4>
+                    <div class="prediction-content">Loading...</div>
+                </div>
+                <div class="prediction-card" id="prediction-model">
+                    <h4 id="prediction-model-title">Model</h4>
                     <div class="prediction-content">Loading...</div>
                 </div>
             </div>
@@ -115,6 +134,11 @@
             <div class="chart-container">
                 <h2>Session Usage (% used)</h2>
                 <canvas id="chart-session"></canvas>
+            </div>
+
+            <div class="chart-container">
+                <h2 id="model-chart-title">Model Usage (% used)</h2>
+                <canvas id="chart-model"></canvas>
             </div>
         </section>
 
@@ -226,7 +250,10 @@
                         meter('Weekly', a.weekly_remaining, a.weekly_will_exceed,
                               a.weekly_resets_at, a.weekly_period_start, 168),
                         meter('Session', a.session_remaining, a.session_will_exceed,
-                              a.session_resets_at, a.session_period_start, 5));
+                              a.session_resets_at, a.session_period_start, 5),
+                        meter(capitalize(a.model_name) || 'Model', a.model_remaining,
+                              a.model_will_exceed, a.model_resets_at,
+                              a.model_period_start, 168));
                     bar.appendChild(btn);
                 }
             } catch (error) {
@@ -419,12 +446,13 @@
             }
         };
 
-        let chartWeekly, chartSession;
+        let chartWeekly, chartSession, chartModel;
 
         // Initialize charts
         function initCharts() {
             const ctxWeekly = document.getElementById('chart-weekly').getContext('2d');
             const ctxSession = document.getElementById('chart-session').getContext('2d');
+            const ctxModel = document.getElementById('chart-model').getContext('2d');
 
             chartWeekly = new Chart(ctxWeekly, {
                 ...chartConfig,
@@ -446,6 +474,16 @@
                     ]
                 }
             });
+
+            chartModel = new Chart(ctxModel, {
+                ...chartConfig,
+                data: {
+                    datasets: [
+                        { label: 'Usage', borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.12)', fill: true, data: [], segment: usageSegment, order: 2 },
+                        { label: 'Target', borderColor: '#f5a524', borderDash: [2, 2], fill: false, pointRadius: 0, data: [], segment: targetSegment, order: 1 }
+                    ]
+                }
+            });
         }
 
         // Combined per-quota signals that color the status card: current usage
@@ -455,7 +493,8 @@
         const SEVERITY = { ok: 0, warning: 1, critical: 2 };
         const statusState = {
             weekly:  { used: null, willExceed: false, cardId: 'card-weekly',  barId: 'weekly-progress' },
-            session: { used: null, willExceed: false, cardId: 'card-session', barId: 'session-progress' }
+            session: { used: null, willExceed: false, cardId: 'card-session', barId: 'session-progress' },
+            model:   { used: null, willExceed: false, cardId: 'card-model',   barId: 'model-progress' }
         };
 
         function applyStatusColor(key) {
@@ -550,6 +589,18 @@
                 setStatusCard('weekly', limits.weekly);
                 setStatusCard('session', limits.session);
 
+                // Always route the model card through setStatusCard (even when
+                // model_specific is absent) so a prior stale marker gets cleared
+                // instead of sticking; only refresh the titles when we have a model.
+                const m = limits.model_specific && limits.model_specific.model;
+                if (m) {
+                    const name = capitalize(m);
+                    document.getElementById('model-title').textContent = name + ' · 7d';
+                    document.getElementById('prediction-model-title').textContent = name;
+                    document.getElementById('model-chart-title').textContent = name + ' Usage (% used)';
+                }
+                setStatusCard('model', limits.model_specific);
+
                 document.getElementById('last-update').textContent = data.timestamp ? new Date(data.timestamp).toLocaleString() : '--';
                 updateFreshness(data.timestamp);
                 return data.timestamp || null;
@@ -579,6 +630,7 @@
 
                 const weeklyData = [];
                 const sessionData = [];
+                const modelData = [];
 
                 history.forEach(record => {
                     const timestamp = new Date(record.timestamp);
@@ -598,6 +650,14 @@
                             y: 100 - (limits.session.percent_remaining || 0),
                             resetAt: limits.session.resets_at,
                             periodStartAt: limits.session.period_start_at
+                        });
+                    }
+                    if (limits.model_specific) {
+                        modelData.push({
+                            x: timestamp,
+                            y: 100 - (limits.model_specific.percent_remaining || 0),
+                            resetAt: limits.model_specific.resets_at,
+                            periodStartAt: limits.model_specific.period_start_at
                         });
                     }
                 });
@@ -627,6 +687,11 @@
                     chartSession.$resetMarkerLines = extractResetMarkers(sessionData);
                 }
                 chartSession.update();
+
+                chartModel.data.datasets[0].data = modelData;
+                chartModel.data.datasets[1].data = calculateIdealLine(modelData, 168);
+                chartModel.$resetMarkerLines = extractResetMarkers(modelData);
+                chartModel.update();
             } catch (error) {
                 console.error('Error loading history:', error);
             }
@@ -710,12 +775,15 @@
 
                 updatePredictionCard('prediction-weekly', predictions.weekly);
                 updatePredictionCard('prediction-session', predictions.session);
+                updatePredictionCard('prediction-model', predictions.model_specific);
 
                 setStatusTrend('weekly-trend', predictions.weekly);
                 setStatusTrend('session-trend', predictions.session);
+                setStatusTrend('model-trend', predictions.model_specific);
 
                 setStatusForecast('weekly', predictions.weekly);
                 setStatusForecast('session', predictions.session);
+                setStatusForecast('model', predictions.model_specific);
             } catch (error) {
                 console.error('Error loading predictions:', error);
             }
@@ -796,6 +864,10 @@
         }
 
         // Helper functions
+        function capitalize(s) {
+            return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+        }
+
         function formatHours(hours) {
             if (hours === null || hours === undefined) return '--';
             const totalSeconds = Math.round(hours * 3600);

@@ -101,12 +101,31 @@ def _make_quota(quota_type: str, model: str, percent_used: float,
     return quota
 
 
+def _scoped_model_name(item: Dict[str, Any]) -> Optional[str]:
+    """Model name of a scoped limit entry (2026-07-01+ `weekly_scoped` shape).
+
+    Reads `scope.model.display_name` (e.g. "Fable"; `id` observed null so far,
+    used as fallback). Lowercased to match the legacy stored names ('sonnet').
+    """
+    scope = item.get('scope')
+    model = scope.get('model') if isinstance(scope, dict) else None
+    if not isinstance(model, dict):
+        return None
+    for key in ('display_name', 'id'):
+        name = model.get(key)
+        if isinstance(name, str) and name.strip():
+            return name.strip().lower()
+    return None
+
+
 def _map_from_limits(limits: List[Any], now: datetime) -> List[Dict[str, Any]]:
     """Map the canonical `limits` array (2026-06-30+) to quota dicts.
 
     session ← kind/group 'session'; weekly ← kind 'weekly_all'; model_specific ←
-    any other group=='weekly' entry (kind like 'weekly_sonnet'). The status card is
-    always Sonnet, so when several per-model entries exist Sonnet wins, else first.
+    any other group=='weekly' entry. The model name comes from the entry's
+    `scope.model` block (kind 'weekly_scoped', 2026-07-01+), falling back to the
+    kind suffix (kind like 'weekly_sonnet'). When several per-model entries
+    exist Sonnet wins (legacy card convention), else first.
     """
     session: Optional[Dict[str, Any]] = None
     weekly: Optional[Dict[str, Any]] = None
@@ -125,7 +144,8 @@ def _map_from_limits(limits: List[Any], now: datetime) -> List[Dict[str, Any]]:
         elif kind == _LIMIT_KIND_WEEKLY_ALL and weekly is None:
             weekly = _make_quota('weekly', '', percent, resets_raw, now)
         elif group == 'weekly' and isinstance(kind, str):
-            model = kind[len('weekly_'):] if kind.startswith('weekly_') else kind
+            model = _scoped_model_name(item) or (
+                kind[len('weekly_'):] if kind.startswith('weekly_') else kind)
             model_candidates.append(_make_quota('model_specific', model, percent, resets_raw, now))
 
     quotas: List[Dict[str, Any]] = []

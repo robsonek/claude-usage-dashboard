@@ -40,9 +40,9 @@ def test_dashboard_has_freshness_indicator():
 
 def test_status_cards_have_value_and_trend_hooks():
     html = _read("templates/dashboard.html")
-    for hook in ('id="weekly-used"', 'id="session-used"',
-                 'id="weekly-trend"', 'id="session-trend"',
-                 'id="card-weekly"', 'id="card-session"'):
+    for hook in ('id="weekly-used"', 'id="session-used"', 'id="model-used"',
+                 'id="weekly-trend"', 'id="session-trend"', 'id="model-trend"',
+                 'id="card-weekly"', 'id="card-session"', 'id="card-model"'):
         assert hook in html, f"missing {hook}"
 
 
@@ -50,15 +50,18 @@ def test_chart_colors_swapped_to_palette():
     html = _read("templates/dashboard.html")
     assert "#22d3ee" in html      # weekly line (cyan)
     assert "#10b981" in html      # session line (green)
+    assert "#a78bfa" in html      # model line (violet)
     assert "#3498db" not in html  # old blue removed
     assert "#9b59b6" not in html  # old purple removed
-    # Per-model (Sonnet) chart removed after the 2026-06-30 API restructure.
+    # The per-model card returned 2026-07-01 (weekly_scoped/Fable) with a dynamic
+    # title — no hardcoded model name anywhere in the markup.
     assert "Sonnet Usage (% used)" not in html
+    assert 'id="model-chart-title"' in html
 
 
 def test_status_cards_have_stale_value_markers():
     html = _read("templates/dashboard.html")
-    for hook in ('id="weekly-stale"', 'id="session-stale"',
+    for hook in ('id="weekly-stale"', 'id="session-stale"', 'id="model-stale"',
                  'setStaleBadge', 'is-stale', 'staleAge'):
         assert hook in html, f"missing {hook}"
     css = _read("static/style.css")

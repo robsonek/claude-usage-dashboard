@@ -163,6 +163,33 @@ def test_limits_prefers_sonnet_over_opus_for_model_card():
     assert models[0]['percent_remaining'] == 60.0
 
 
+def test_weekly_scoped_model_name_from_scope_display_name():
+    # Real 2026-07-01 shape (Fable launch): the per-model window returned as
+    # kind 'weekly_scoped', with the model named only in scope.model.display_name.
+    sample = dict(NEW_LIMITS_SAMPLE)
+    sample['limits'] = NEW_LIMITS_SAMPLE['limits'] + [
+        {"group": "weekly", "kind": "weekly_scoped", "percent": 4, "severity": "normal",
+         "resets_at": "2026-07-03T01:00:00+00:00",
+         "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+         "is_active": False},
+    ]
+    quotas = auf.map_usage_response(sample, now=NOW_NEW)
+    model = next(q for q in quotas if q['type'] == 'model_specific')
+    assert model['model'] == 'fable'
+    assert model['percent_remaining'] == 96.0
+
+
+def test_weekly_scoped_without_scope_falls_back_to_kind_suffix():
+    sample = dict(NEW_LIMITS_SAMPLE)
+    sample['limits'] = NEW_LIMITS_SAMPLE['limits'] + [
+        {"group": "weekly", "kind": "weekly_scoped", "percent": 4,
+         "resets_at": "2026-07-03T01:00:00+00:00", "scope": None, "is_active": False},
+    ]
+    quotas = auf.map_usage_response(sample, now=NOW_NEW)
+    model = next(q for q in quotas if q['type'] == 'model_specific')
+    assert model['model'] == 'scoped'
+
+
 def test_falls_back_to_flat_windows_when_no_limits_array():
     # Legacy / transition: no `limits` key → map from the flat top-level windows.
     quotas = auf.map_usage_response(PROD_SAMPLE, now=NOW)
