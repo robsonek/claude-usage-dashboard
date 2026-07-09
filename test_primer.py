@@ -123,6 +123,7 @@ def test_prime_returns_started_even_if_postsend_read_fails(db, monkeypatch):
     a = _add(db)
     account = db.get_account_for_primer(a)
     usage_n = {'n': 0}
+    sleeps = []
 
     def usage(token):
         usage_n['n'] += 1
@@ -132,7 +133,60 @@ def test_prime_returns_started_even_if_postsend_read_fails(db, monkeypatch):
 
     monkeypatch.setattr(primer.auf, '_http_get_usage', usage)
     monkeypatch.setattr(primer.auf, 'send_haiku_primer', lambda token, model=None: {'id': 'm'})
+    monkeypatch.setattr(primer, '_sleep', sleeps.append)
 
     result = primer.prime_account(db, account)
     assert result['started'] is True       # send succeeded -> started, despite read failure
     assert result['resets_at'] is None     # no post-send usage to report
+    assert usage_n['n'] == 2               # read loop aborts on first error — no hammering
+    assert sleeps == []
+
+
+# ---- post-send retry (2026-06-30+ API materializes the fresh window lazily) ----
+
+def test_prime_retries_postsend_read_until_reset_appears(db, monkeypatch):
+    # Right after the primer send the restructured usage API still reports the
+    # session window as idle (resets_at null); it materializes within ~2 min.
+    # prime_account re-reads briefly so the toast can show the real reset time.
+    a = _add(db)
+    account = db.get_account_for_primer(a)
+    usage_n = {'n': 0}
+    sleeps = []
+
+    def usage(token):
+        usage_n['n'] += 1
+        # guard + post-send #1: window not materialized yet (idle, no resets_at)
+        return _sample(None) if usage_n['n'] <= 2 else _sample(FUTURE)
+
+    monkeypatch.setattr(primer.auf, '_http_get_usage', usage)
+    monkeypatch.setattr(primer.auf, 'send_haiku_primer', lambda token, model=None: {'id': 'm'})
+    monkeypatch.setattr(primer, '_sleep', sleeps.append)
+
+    result = primer.prime_account(db, account)
+    assert result['started'] is True
+    assert result['resets_at'] == '2999-01-01T00:00:00Z'
+    assert usage_n['n'] == 3                       # guard + 2 post-send attempts
+    assert sleeps == [primer._POSTSEND_DELAY_S]    # one pause before the retry
+    assert db.get_current(account_id=a) is not None  # snapshot from the final read
+
+
+def test_prime_gives_up_after_bounded_postsend_retries(db, monkeypatch):
+    a = _add(db)
+    account = db.get_account_for_primer(a)
+    usage_n = {'n': 0}
+    sleeps = []
+
+    def usage(token):
+        usage_n['n'] += 1
+        return _sample(None)                       # window never materializes in time
+
+    monkeypatch.setattr(primer.auf, '_http_get_usage', usage)
+    monkeypatch.setattr(primer.auf, 'send_haiku_primer', lambda token, model=None: {'id': 'm'})
+    monkeypatch.setattr(primer, '_sleep', sleeps.append)
+
+    result = primer.prime_account(db, account)
+    assert result['started'] is True
+    assert result['resets_at'] is None             # honest: caller shows the fallback text
+    assert usage_n['n'] == 1 + primer._POSTSEND_ATTEMPTS
+    assert len(sleeps) == primer._POSTSEND_ATTEMPTS - 1
+    assert db.get_current(account_id=a) is not None  # best-effort snapshot still written

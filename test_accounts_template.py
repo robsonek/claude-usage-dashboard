@@ -59,3 +59,11 @@ def test_start_session_js_handler_defined():
     html = _read("templates/accounts.html")
     assert 'async function startSession(' in html
     assert '/start_session' in html
+
+
+def test_start_session_toast_has_missing_reset_fallback():
+    """When the API hasn't materialized the fresh window yet (resets_at null),
+    the toast must say when the time will show up — never 'resets at unknown'."""
+    html = _read("templates/accounts.html")
+    assert 'unknown' not in html
+    assert 'reset time will appear after the next poll' in html

@@ -325,11 +325,17 @@ async function startSession(id) {
         const r = await fetch(`/accounts/${id}/start_session`, {method: 'POST'});
         const d = await r.json();
         if (!r.ok) { showToast(d.error || `Error ${r.status}`, 'err'); return; }
+        // resets_at can be null right after a send: the usage API materializes the
+        // fresh window lazily (the next poll picks it up). Say so — no bogus placeholder.
         const reset = d.resets_at
             ? new Date(d.resets_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
-            : 'unknown';
-        if (d.started) showToast(`5h window started — resets at ${reset}.`, 'ok');
-        else showToast(`Window already active — resets at ${reset}.`, 'info');
+            : null;
+        if (d.started) showToast(reset
+            ? `5h window started — resets at ${reset}.`
+            : '5h window started — reset time will appear after the next poll (~2 min).', 'ok');
+        else showToast(reset
+            ? `Window already active — resets at ${reset}.`
+            : 'Window already active.', 'info');
     } catch (e) {
         showToast('Error: ' + e, 'err');
     }
