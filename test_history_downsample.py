@@ -23,8 +23,13 @@ def _db():
 
 
 def _seed(db, n, *, end=None, step_min=1):
-    """Insert n snapshots, step_min apart, ending at `end` (default now)."""
-    end = end or datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
+    """Insert n snapshots, step_min apart, ending at `end` (default now).
+
+    `end` must stay relative to the wall clock: get_history(hours=N) filters
+    against now(), so a pinned calendar date turns these into time-bomb tests
+    that silently return 0 rows once the date ages out of the window.
+    """
+    end = end or datetime.now(timezone.utc)
     far_reset = (end + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for i in range(n):
         ts = (end - timedelta(minutes=(n - 1 - i) * step_min)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -86,7 +91,7 @@ def test_downsampled_rows_keep_order_and_quotas():
     try:
         _seed(db, 400)
         ds = db.get_history(hours=1000, max_points=50)
-        assert len(ds) <= 50
+        assert 40 <= len(ds) <= 50    # non-empty floor: an empty list passed vacuously
         ts = [r["timestamp"] for r in ds]
         assert ts == sorted(ts)                                # chronological
         assert all("weekly" in r["limits"] for r in ds)        # quota data intact
