@@ -30,13 +30,20 @@
     <section class="accounts-panel" id="accounts-list">
         {% for a in accounts %}
         <div class="account-row" data-id="{{ a.id }}">
-            <span class="acc-dot {{ 'on' if a.is_active else 'off' }}"></span>
+            <span class="acc-dot {{ 'warn' if a.needs_reauth else ('on' if a.is_active else 'off') }}"></span>
             <div class="acc-id">
                 <span class="acc-label">{{ a.label }}</span>
                 <span class="acc-email">{{ a.email or '—' }}</span>
             </div>
             <span class="acc-type">{{ a.account_type or '?' }}</span>
-            {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ read error</span>{% endif %}
+            {% if a.get('grant_age_days') is not none %}
+            <span class="acc-age{{ ' warn' if a.grant_age_days >= grant_warn_days|default(25) else '' }}"
+                  title="Anthropic OAuth grants expire ~28 days after authorization — use Refresh session before that to avoid an interruption.">grant {{ a.grant_age_days }}d</span>
+            {% endif %}
+            {% if a.needs_reauth %}
+            <span class="acc-reauth" title="Polling is paused after {{ a.auth_failures }} consecutive invalid_grant failures (grant expired or revoked). Click Refresh session to re-authorize.">⛔ Re-auth required</span>
+            {% endif %}
+            {% if a.last_error %}<span class="acc-error" title="{{ a.last_error }}">⚠ {{ a.last_error|truncate(70, True) }}</span>{% endif %}
             <span class="acc-actions">
                 {% if a.is_active %}
                 <button class="primer" onclick="startSession({{ a.id }})">Start 5h</button>

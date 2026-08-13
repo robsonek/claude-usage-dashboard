@@ -202,11 +202,15 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .acc-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
 .acc-dot.on{background:var(--ok);box-shadow:0 0 7px var(--ok)}
 .acc-dot.off{background:var(--label)}
+.acc-dot.warn{background:var(--crit);box-shadow:0 0 7px var(--crit)}
 .acc-id{display:flex;flex-direction:column;gap:2px;min-width:0}
 .acc-label{font-weight:600;color:var(--text)}
 .acc-email{font-family:var(--mono);font-size:.72rem;color:var(--label);overflow:hidden;text-overflow:ellipsis}
 .acc-type{font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-border);padding:3px 9px;border-radius:6px}
-.acc-error{font-family:var(--mono);font-size:.7rem;color:var(--warn);cursor:help}
+.acc-error{font-family:var(--mono);font-size:.7rem;color:var(--warn);cursor:help;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:34ch}
+.acc-age{font-family:var(--mono);font-size:.66rem;letter-spacing:.05em;color:var(--label);border:1px solid var(--border);padding:3px 9px;border-radius:6px;cursor:help;white-space:nowrap}
+.acc-age.warn{color:var(--warn);border-color:rgba(251,191,36,.35)}
+.acc-reauth{font-family:var(--mono);font-size:.66rem;letter-spacing:.05em;text-transform:uppercase;color:var(--crit);background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.4);padding:3px 9px;border-radius:6px;cursor:help;white-space:nowrap}
 .acc-empty{color:var(--label);font-family:var(--mono);font-size:.8rem;padding:14px 0}
 .acc-actions{margin-left:auto;display:flex;gap:7px;flex-wrap:wrap}
 .acc-actions button{font-family:var(--mono);font-size:.72rem;padding:5px 11px;border-radius:6px;border:1px solid var(--border);background:rgba(255,255,255,.045);color:var(--mid);cursor:pointer;transition:all .15s}
@@ -241,7 +245,8 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
      dropped badges/buttons in arbitrary order on narrow screens. */
   .account-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px 10px;align-items:center}
   .acc-type{justify-self:end}
-  .acc-error{grid-column:2/-1}
+  .acc-age,.acc-reauth{grid-column:2/-1;justify-self:start}
+  .acc-error{grid-column:2/-1;max-width:100%}
   .acc-actions{grid-column:1/-1;margin-left:0;display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
   .acc-actions button{padding:9px 6px}
   /* Add account: stack the code/label fields and the button full-width.

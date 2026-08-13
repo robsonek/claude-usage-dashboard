@@ -388,12 +388,39 @@ def dashboard():
     return render_template('dashboard.html', version=config.VERSION)
 
 
+# Anthropic OAuth grants expire ~28 days after authorization ("Refresh token
+# expired") — amber-flag the age in the UI early enough to re-auth calmly.
+GRANT_AGE_WARN_DAYS = 25
+
+
+def _grant_age_days(authorized_at):
+    """Whole days since the account's OAuth authorization; None if unknown
+    (accounts added before authorized_at existed, until their next re-auth)."""
+    if not authorized_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(authorized_at))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - dt).total_seconds() // 86400))
+
+
+def _accounts_with_grant_age(db):
+    accounts = db.list_accounts()
+    for acc in accounts:
+        acc['grant_age_days'] = _grant_age_days(acc.get('authorized_at'))
+    return accounts
+
+
 @app.route('/accounts')
 @login_required
 def accounts_page():
     """Account management UI."""
     return render_template('accounts.html', version=config.VERSION,
-                           accounts=get_db().list_accounts())
+                           accounts=_accounts_with_grant_age(get_db()),
+                           grant_warn_days=GRANT_AGE_WARN_DAYS)
 
 
 @app.route('/api/accounts')
@@ -402,7 +429,7 @@ def api_accounts():
     """Account list + each account's latest snapshot summary (for the bar)."""
     db = get_db()
     out = []
-    for acc in db.list_accounts():
+    for acc in _accounts_with_grant_age(db):
         weekly = session_pct = model_pct = model_name = None
         weekly_reset = session_reset = model_reset = None
         weekly_start = session_start = model_start = None

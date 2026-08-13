@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import account_session
 import api_usage_fetcher as auf
 import config
-from database import UsageDatabase
+from database import UsageDatabase, REAUTH_FAILURE_THRESHOLD
 
 DATA_DIR = config.DATA_DIR
 
@@ -81,6 +81,14 @@ def _poll_one(db, account) -> bool:
     except Exception as e:
         _log(f'WARN: account {acc_id} ({account.get("email")}) failed: {e}')
         db.record_account_poll(acc_id, error=str(e)[:300])
+        if getattr(e, 'oauth_error', None) == 'invalid_grant':
+            # An expired/revoked grant never heals on its own — after a few
+            # consecutive hits, pause the account instead of hammering the
+            # token endpoint every tick until someone re-authorizes it.
+            if db.record_auth_failure(acc_id):
+                _log(f'WARN: account {acc_id} flagged needs_reauth after '
+                     f'{REAUTH_FAILURE_THRESHOLD} consecutive invalid_grant '
+                     'failures; polling paused until re-auth')
         return False
 
 

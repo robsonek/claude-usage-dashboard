@@ -68,12 +68,15 @@ class UsageApiError(Exception):
 
     `status` carries the HTTP status code when the failure was an HTTP error
     (e.g. 401 = dead/invalid access token → caller can refresh and retry),
-    else None.
+    else None. `oauth_error` carries the OAuth error code from a token-endpoint
+    error body (e.g. 'invalid_grant' when the grant expired — Anthropic grants
+    die ~28 days after authorization), else None.
     """
 
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, oauth_error=None):
         super().__init__(message)
         self.status = status
+        self.oauth_error = oauth_error
 
 
 def _make_quota(quota_type: str, model: str, percent_used: float,
@@ -205,6 +208,21 @@ def needs_refresh_ms(expires_at_ms, now_ms=None) -> bool:
     return now_ms >= expires_at_ms - REFRESH_MARGIN_MS
 
 
+def _read_oauth_error_body(e) -> tuple:
+    """(detail, oauth_error) from a token-endpoint HTTPError body.
+
+    Standard shape: {"error": "invalid_grant", "error_description": "..."}.
+    A non-JSON body (e.g. a Cloudflare block page) falls back to the HTTP
+    reason with no oauth_error.
+    """
+    try:
+        body = json.loads(e.read().decode())
+        detail = body.get('error_description') or body.get('error') or e.reason
+        return str(detail)[:200], body.get('error')
+    except Exception:
+        return str(e.reason), None
+
+
 def refresh_access_token(refresh_token: str, now_ms=None) -> Dict[str, Any]:
     """POST the refresh grant; return new {access_token, refresh_token, expires_at}.
     Does not touch any file — caller persists to the DB."""
@@ -222,8 +240,15 @@ def refresh_access_token(refresh_token: str, now_ms=None) -> Dict[str, Any]:
     try:
         with _urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             token = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        # The ERROR body carries no secrets (unlike the request payload or a
+        # success body) — surface its error_description so last_error / the UI
+        # can say "Refresh token expired" instead of a bare status code.
+        detail, oauth_error = _read_oauth_error_body(e)
+        raise UsageApiError(f'token refresh failed: HTTP {e.code}: {detail}',
+                            status=e.code, oauth_error=oauth_error) from e
     except Exception as e:
-        # Never include the request/response payload here: it carries tokens.
+        # Never include the request payload here: it carries tokens.
         raise UsageApiError(f'token refresh failed: {type(e).__name__}: {e}') from e
     access_token = token.get('access_token')
     if not access_token:

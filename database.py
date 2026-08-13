@@ -57,6 +57,13 @@ _RESETS_AHEAD_MARGIN_HOURS = 1
 # on the API path build_snapshot guarantees session+weekly, so those rarely miss.)
 _FALLBACK_QUOTA_TYPES = ('weekly', 'session')
 
+# Consecutive invalid_grant refresh failures before an account is flagged
+# needs_reauth and skipped by the collector. Anthropic OAuth grants expire
+# ~28 days after authorization ("Refresh token expired"); once that happens
+# every retry is a guaranteed-invalid token-endpoint request (per-IP 429
+# risk). 3 tolerates the transient single-tick 400s the endpoint emits.
+REAUTH_FAILURE_THRESHOLD = 3
+
 
 class UsageDatabase:
     """Data Access Layer for usage snapshots stored in SQLite."""
@@ -115,7 +122,10 @@ class UsageDatabase:
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at DATETIME,
                 last_polled_at DATETIME,
-                last_error TEXT
+                last_error TEXT,
+                authorized_at DATETIME,
+                auth_failures INTEGER NOT NULL DEFAULT 0,
+                needs_reauth INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_captured_at ON snapshots(captured_at);
@@ -131,6 +141,18 @@ class UsageDatabase:
         snap_cols = {row['name'] for row in cursor.fetchall()}
         if 'account_id' not in snap_cols:
             cursor.execute("ALTER TABLE snapshots ADD COLUMN account_id INTEGER")
+        # Grant-expiry tracking (Anthropic OAuth grants die ~28d after authorization):
+        # authorized_at stays NULL on legacy rows until the next re-auth (age unknown).
+        cursor.execute("PRAGMA table_info(accounts)")
+        acc_cols = {row['name'] for row in cursor.fetchall()}
+        if 'authorized_at' not in acc_cols:
+            cursor.execute("ALTER TABLE accounts ADD COLUMN authorized_at DATETIME")
+        if 'auth_failures' not in acc_cols:
+            cursor.execute(
+                "ALTER TABLE accounts ADD COLUMN auth_failures INTEGER NOT NULL DEFAULT 0")
+        if 'needs_reauth' not in acc_cols:
+            cursor.execute(
+                "ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_snapshots_account_id ON snapshots(account_id)")
         self.conn.commit()
@@ -610,20 +632,23 @@ class UsageDatabase:
         if email:
             existing = cur.execute(
                 "SELECT id FROM accounts WHERE email = ?", (email,)).fetchone()
+        now = datetime.now(timezone.utc)
         if existing:
             acc_id = existing['id']
+            # A (re-)auth mints a brand-new grant: restart the grant-age clock
+            # and clear the invalid_grant failure state so polling resumes.
             cur.execute("""
                 UPDATE accounts SET label=?, account_type=?, access_token=?,
-                    refresh_token=?, expires_at=?, is_active=1, last_error=NULL
+                    refresh_token=?, expires_at=?, is_active=1, last_error=NULL,
+                    authorized_at=?, auth_failures=0, needs_reauth=0
                 WHERE id=?
-            """, (label, account_type, enc_at, enc_rt, expires_at, acc_id))
+            """, (label, account_type, enc_at, enc_rt, expires_at, now, acc_id))
         else:
             cur.execute("""
                 INSERT INTO accounts (label, email, account_type, access_token,
-                    refresh_token, expires_at, is_active, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-            """, (label, email, account_type, enc_at, enc_rt, expires_at,
-                  datetime.now(timezone.utc)))
+                    refresh_token, expires_at, is_active, created_at, authorized_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """, (label, email, account_type, enc_at, enc_rt, expires_at, now, now))
             acc_id = cur.lastrowid
         self.conn.commit()
         return acc_id
@@ -632,7 +657,8 @@ class UsageDatabase:
         """Account metadata for UI — never includes tokens."""
         cur = self.conn.execute("""
             SELECT id, label, email, account_type, is_active,
-                   created_at, last_polled_at, last_error
+                   created_at, last_polled_at, last_error,
+                   authorized_at, auth_failures, needs_reauth
             FROM accounts ORDER BY id ASC
         """)
         return [dict(row) for row in cur.fetchall()]
@@ -650,10 +676,12 @@ class UsageDatabase:
         # Lazy import (see add_or_update_account): keep database.py importable
         # before cryptography is installed on first deploy.
         import crypto_util
+        # needs_reauth = expired/revoked grant: retrying it every tick would only
+        # hammer the token endpoint (per-IP 429 risk) — paused until re-auth.
         cur = self.conn.execute("""
             SELECT id, label, email, account_type, access_token, refresh_token,
                    expires_at
-            FROM accounts WHERE is_active = 1 ORDER BY id ASC
+            FROM accounts WHERE is_active = 1 AND needs_reauth = 0 ORDER BY id ASC
         """)
         out = []
         for row in cur.fetchall():
@@ -713,10 +741,43 @@ class UsageDatabase:
         self.conn.commit()
 
     def record_account_poll(self, account_id, error=None):
-        self.conn.execute(
-            "UPDATE accounts SET last_polled_at=?, last_error=? WHERE id=?",
-            (datetime.now(timezone.utc), error, account_id))
+        if error is None:
+            # A working poll proves the grant is alive — clear the
+            # invalid_grant streak (and a stale needs_reauth, e.g. after a
+            # successful primer on a paused account).
+            self.conn.execute(
+                "UPDATE accounts SET last_polled_at=?, last_error=NULL,"
+                " auth_failures=0, needs_reauth=0 WHERE id=?",
+                (datetime.now(timezone.utc), account_id))
+        else:
+            self.conn.execute(
+                "UPDATE accounts SET last_polled_at=?, last_error=? WHERE id=?",
+                (datetime.now(timezone.utc), error, account_id))
         self.conn.commit()
+
+    def record_auth_failure(self, account_id) -> bool:
+        """Count one invalid_grant refresh failure for this account.
+
+        At REAUTH_FAILURE_THRESHOLD consecutive failures the account is
+        flagged needs_reauth (get_pollable_accounts skips it from then on).
+        Returns True exactly when this call crossed the threshold, so the
+        caller can log the pause once. The streak resets on a successful poll
+        (record_account_poll) or a re-auth (add_or_update_account).
+        """
+        self.conn.execute(
+            "UPDATE accounts SET auth_failures = auth_failures + 1 WHERE id=?",
+            (account_id,))
+        row = self.conn.execute(
+            "SELECT auth_failures, needs_reauth FROM accounts WHERE id=?",
+            (account_id,)).fetchone()
+        tripped = False
+        if row and row['auth_failures'] >= REAUTH_FAILURE_THRESHOLD \
+                and not row['needs_reauth']:
+            self.conn.execute(
+                "UPDATE accounts SET needs_reauth=1 WHERE id=?", (account_id,))
+            tripped = True
+        self.conn.commit()
+        return tripped
 
     def delete_account(self, account_id):
         """Remove the account row. Snapshots keep their account_id (history stays).
