@@ -48,7 +48,7 @@
                 {% if a.is_active %}
                 <button class="primer" onclick="startSession({{ a.id }})">Start 5h</button>
                 {% endif %}
-                <button class="reauth" data-email="{{ a.email }}">Refresh session</button>
+                <button class="reauth" data-email="{{ a.email }}" data-label="{{ a.label }}">Refresh session</button>
                 {% if a.is_active %}
                 <button onclick="op({{ a.id }}, 'disable')">Disable</button>
                 {% else %}
@@ -295,11 +295,14 @@ async function copyAuthUrl() {
 }
 // Re-authorize an existing account: same OAuth flow; the add endpoint upserts by
 // email, so logging into the matching Claude account repairs its tokens in place.
-async function reauth(email) {
+// The label field is pre-filled with the account's current label — left empty, the
+// upsert would overwrite a custom label with the email (server falls back to it).
+async function reauth(email, label) {
     const hint = email
         ? `Refreshing the session of ${email} — sign in to EXACTLY this account and paste the code.`
         : '';
     await startOAuth(hint);
+    document.getElementById('label-input').value = label || '';
     document.querySelector('.add-account').scrollIntoView({behavior: 'smooth'});
 }
 async function completeOAuth() {
@@ -371,10 +374,10 @@ async function renameAcc(id, current = '') {
         body:new URLSearchParams({label: trimmed})});
     location.reload();
 }
-// Wire re-auth buttons via data-email (read with dataset, never inlined into a
-// JS string) so an email can't break out of an inline handler and execute.
+// Wire re-auth buttons via data-email/data-label (read with dataset, never inlined
+// into a JS string) so an email can't break out of an inline handler and execute.
 document.querySelectorAll('.reauth').forEach(btn => {
-    btn.addEventListener('click', () => reauth(btn.dataset.email));
+    btn.addEventListener('click', () => reauth(btn.dataset.email, btn.dataset.label));
 });
 // Rename via data-id/data-label (read with dataset, never inlined) so a label can't
 // break out of an inline handler; the current label pre-fills the prompt modal.
