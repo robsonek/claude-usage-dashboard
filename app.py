@@ -434,24 +434,30 @@ def api_accounts():
         weekly_reset = session_reset = model_reset = None
         weekly_start = session_start = model_start = None
         weekly_exceed = session_exceed = model_exceed = False
+        # Read the latest snapshot for EVERY account, disabled ones included: the
+        # dashboard shows a disabled account's last known readings (frozen at the
+        # moment polling stopped), timestamped via last_reading_at.
+        current = db.get_current(account_id=acc['id'])
+        last_reading = None
+        if current:
+            last_reading = current.get('timestamp')
+            wq = current['limits'].get('weekly') or {}
+            sq = current['limits'].get('session') or {}
+            mq = current['limits'].get('model_specific') or {}
+            weekly = wq.get('percent_remaining')
+            weekly_reset = wq.get('resets_at')
+            weekly_start = wq.get('period_start_at')
+            session_pct = sq.get('percent_remaining')
+            session_reset = sq.get('resets_at')
+            session_start = sq.get('period_start_at')
+            model_pct = mq.get('percent_remaining')
+            model_reset = mq.get('resets_at')
+            model_start = mq.get('period_start_at')
+            model_name = mq.get('model')
         if acc['is_active']:
-            current = db.get_current(account_id=acc['id'])
-            if current:
-                wq = current['limits'].get('weekly') or {}
-                sq = current['limits'].get('session') or {}
-                mq = current['limits'].get('model_specific') or {}
-                weekly = wq.get('percent_remaining')
-                weekly_reset = wq.get('resets_at')
-                weekly_start = wq.get('period_start_at')
-                session_pct = sq.get('percent_remaining')
-                session_reset = sq.get('resets_at')
-                session_start = sq.get('period_start_at')
-                model_pct = mq.get('percent_remaining')
-                model_reset = mq.get('resets_at')
-                model_start = mq.get('period_start_at')
-                model_name = mq.get('model')
             # Same prediction the dashboard uses, so the mini-card color can match
             # the big STATUS card (a forecast overage escalates to amber even at low %).
+            # Disabled accounts are skipped: no fresh data means no trend to forecast.
             history = db.get_history(account_id=acc['id'],
                                      hours=ACCOUNT_BAR_PREDICTION_HOURS)
             weekly_exceed = bool((calculate_prediction(history, 'weekly') or {}).get('will_exceed'))
@@ -464,7 +470,7 @@ def api_accounts():
                     'weekly_period_start': weekly_start, 'session_period_start': session_start,
                     'model_period_start': model_start,
                     'weekly_will_exceed': weekly_exceed, 'session_will_exceed': session_exceed,
-                    'model_will_exceed': model_exceed})
+                    'model_will_exceed': model_exceed, 'last_reading_at': last_reading})
     return jsonify(out)
 
 

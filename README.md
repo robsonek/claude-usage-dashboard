@@ -274,6 +274,9 @@ database (Fernet), so `TOKEN_ENCRYPTION_KEY` must be set in `.env` first (see
 
 The account is then polled every 5 minutes. Add as many accounts as you like; the
 account bar on the dashboard switches between them. Multi-account support requires v1.3.0+.
+Disabled accounts are kept out of that bar but stay one click away: the **Show disabled**
+toggle in the bar's header reveals them as ordinary cards, showing the last readings taken
+before polling stopped, and selecting one loads its history into the dashboard (v1.11.0+).
 
 Each account row on the **Accounts** page offers these actions:
 
@@ -285,7 +288,8 @@ Each account row on the **Accounts** page offers these actions:
   with the account's own subscription token — no separate API credits are billed.
 - **Refresh session** — re-runs the authorization flow to repair an account whose token
   was revoked (e.g. logout or CLI reinstall). It matches by e-mail, so history is kept.
-- **Enable / Disable** — pause or resume polling for an account without deleting its history.
+- **Enable / Disable** — pause or resume polling for an account without deleting its
+  history, which stays browsable on the dashboard behind the **Show disabled** toggle.
 - **Rename / Delete** — relabel an account, or remove it (its snapshots are retained).
 
 > The OAuth token endpoint is fronted by Cloudflare and is sensitive to the

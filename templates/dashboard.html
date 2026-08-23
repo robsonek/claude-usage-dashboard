@@ -38,8 +38,14 @@
         </header>
 
         <div id="account-section" hidden>
-            <div class="section-label">Accounts <span class="label-hint">· click to switch</span></div>
+            <div class="section-label section-label-row">
+                <span>Accounts <span class="label-hint">· click to switch</span></span>
+                <button type="button" id="disabled-toggle" class="acc-toggle" hidden
+                        aria-expanded="false" aria-controls="account-bar-disabled"
+                        onclick="toggleDisabledAccounts()"></button>
+            </div>
             <div class="account-bar" id="account-bar"></div>
+            <div class="account-bar account-bar-off" id="account-bar-disabled" hidden></div>
         </div>
 
         <!-- Current status cards -->
@@ -151,111 +157,97 @@
         // ---- Multi-account switcher ----
         let currentAccount = localStorage.getItem('account_id') || null;
 
+        // Match the STATUS cards: show % USED (not remaining) and color each metric
+        // with the same logic — raw threshold, escalated to amber when the prediction
+        // forecasts an overage (will_exceed).
+        function accountMeter(lbl, remaining, willExceed, resetsAt, periodStart, periodHours) {
+            const row = document.createElement('span');
+            row.className = 'acc-mini-meter';
+            const name = document.createElement('span');
+            name.className = 'm-lbl';
+            name.textContent = lbl;
+            const track = document.createElement('span');
+            track.className = 'acc-mini-bar';
+            const fill = document.createElement('span');
+            fill.className = 'acc-mini-fill';
+            const val = document.createElement('span');
+            val.className = 'm-val';
+            if (remaining == null) {
+                val.textContent = '--%';
+            } else {
+                const used = Math.round(100 - remaining);
+                let cls = getProgressClass(used);
+                if (willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
+                fill.classList.add(cls);
+                val.classList.add(cls);
+                fill.style.width = Math.min(used, 100) + '%';
+                val.textContent = `${used}%`;
+            }
+            // Time left in the current window, from the same quota row the
+            // percentage came from (dim, so the % stays the focus).
+            const eta = document.createElement('span');
+            eta.className = 'm-eta';
+            if (resetsAt) {
+                const hrs = (new Date(resetsAt) - Date.now()) / 3600000;
+                eta.textContent = formatHours(hrs);
+            }
+            track.append(fill);
+            // Target tick: where the bar SHOULD be right now at an even burn
+            // rate (mirrors the charts' amber Target line).
+            if (resetsAt) {
+                const reset = new Date(resetsAt).getTime();
+                const start = periodStart
+                    ? new Date(periodStart).getTime()
+                    : reset - periodHours * 3600000;
+                const frac = (Date.now() - start) / (reset - start);
+                if (isFinite(frac)) {
+                    const tick = document.createElement('span');
+                    tick.className = 'acc-mini-tick';
+                    tick.style.left = (Math.max(0, Math.min(1, frac)) * 100) + '%';
+                    track.append(tick);
+                }
+            }
+            row.append(name, track, val, eta);
+            return row;
+        }
+
+        // The three meters every account card shows, in dashboard order.
+        function accountMeters(a) {
+            return [
+                accountMeter('Weekly', a.weekly_remaining, a.weekly_will_exceed,
+                             a.weekly_resets_at, a.weekly_period_start, 168),
+                accountMeter('Session', a.session_remaining, a.session_will_exceed,
+                             a.session_resets_at, a.session_period_start, 5),
+                accountMeter(capitalize(a.model_name) || 'Model', a.model_remaining,
+                             a.model_will_exceed, a.model_resets_at,
+                             a.model_period_start, 168),
+            ];
+        }
+
         async function loadAccountBar() {
             try {
                 const res = await fetch('/api/accounts');
                 const accounts = await res.json();
                 if (!Array.isArray(accounts)) return;   // e.g. session expired → login HTML
-                const active = accounts.filter(a => a.is_active);
+                activeAccounts = accounts.filter(a => a.is_active);
+                disabledAccounts = accounts.filter(a => !a.is_active);
                 const bar = document.getElementById('account-bar');
                 const section = document.getElementById('account-section');
-                if (active.length <= 1) {
-                    section.hidden = true;
-                    if (active[0]) {
-                        currentAccount = String(active[0].id);
+                // Every account with history is selectable, disabled ones included —
+                // their snapshots stay in the DB and the /api/* endpoints don't care
+                // about is_active. The stored id is only corrected when it points at
+                // an account that no longer exists (deleted).
+                if (!currentAccount || !accounts.some(a => String(a.id) === String(currentAccount))) {
+                    const fallback = activeAccounts[0] || accounts[0];
+                    if (fallback) {
+                        currentAccount = String(fallback.id);
                         localStorage.setItem('account_id', currentAccount);
                     }
-                    return;
                 }
-                // Correct a stale stored id (deleted/disabled account) before any fetch.
-                if (!currentAccount || !active.some(a => String(a.id) === String(currentAccount))) {
-                    currentAccount = String(active[0].id);
-                    localStorage.setItem('account_id', currentAccount);
-                }
-                section.hidden = false;
-                bar.replaceChildren();
-                for (const a of active) {
-                    const btn = document.createElement('button');
-                    btn.className = 'acc-mini' + (String(a.id) === String(currentAccount) ? ' active' : '');
-                    btn.onclick = () => switchAccount(a.id);
-                    // Radio-style dot signals these are selectable buttons, not
-                    // just meters; the active account gets a filled accent dot.
-                    const label = document.createElement('span');
-                    label.className = 'acc-mini-label';
-                    const radio = document.createElement('span');
-                    radio.className = 'acc-mini-radio';
-                    const labelText = document.createElement('span');
-                    labelText.textContent = a.label;             // textContent = no HTML injection
-                    label.append(radio, labelText);
-                    if (a.account_type && a.account_type !== 'unknown') {
-                        const type = document.createElement('span');
-                        type.className = 'acc-mini-type';
-                        type.textContent = a.account_type;
-                        label.append(type);
-                    }
-                    // Match the STATUS cards: show % USED (not remaining) and color
-                    // each metric with the same logic — raw threshold, escalated to
-                    // amber when the prediction forecasts an overage (will_exceed).
-                    const meter = (lbl, remaining, willExceed, resetsAt, periodStart, periodHours) => {
-                        const row = document.createElement('span');
-                        row.className = 'acc-mini-meter';
-                        const name = document.createElement('span');
-                        name.className = 'm-lbl';
-                        name.textContent = lbl;
-                        const track = document.createElement('span');
-                        track.className = 'acc-mini-bar';
-                        const fill = document.createElement('span');
-                        fill.className = 'acc-mini-fill';
-                        const val = document.createElement('span');
-                        val.className = 'm-val';
-                        if (remaining == null) {
-                            val.textContent = '--%';
-                        } else {
-                            const used = Math.round(100 - remaining);
-                            let cls = getProgressClass(used);
-                            if (willExceed && SEVERITY[cls] < SEVERITY.warning) cls = 'warning';
-                            fill.classList.add(cls);
-                            val.classList.add(cls);
-                            fill.style.width = Math.min(used, 100) + '%';
-                            val.textContent = `${used}%`;
-                        }
-                        // Time left in the current window, from the same quota row
-                        // the percentage came from (dim, so the % stays the focus).
-                        const eta = document.createElement('span');
-                        eta.className = 'm-eta';
-                        if (resetsAt) {
-                            const hrs = (new Date(resetsAt) - Date.now()) / 3600000;
-                            eta.textContent = formatHours(hrs);
-                        }
-                        track.append(fill);
-                        // Target tick: where the bar SHOULD be right now at an even
-                        // burn rate (mirrors the charts' amber Target line).
-                        if (resetsAt) {
-                            const reset = new Date(resetsAt).getTime();
-                            const start = periodStart
-                                ? new Date(periodStart).getTime()
-                                : reset - periodHours * 3600000;
-                            const frac = (Date.now() - start) / (reset - start);
-                            if (isFinite(frac)) {
-                                const tick = document.createElement('span');
-                                tick.className = 'acc-mini-tick';
-                                tick.style.left = (Math.max(0, Math.min(1, frac)) * 100) + '%';
-                                track.append(tick);
-                            }
-                        }
-                        row.append(name, track, val, eta);
-                        return row;
-                    };
-                    btn.append(label,
-                        meter('Weekly', a.weekly_remaining, a.weekly_will_exceed,
-                              a.weekly_resets_at, a.weekly_period_start, 168),
-                        meter('Session', a.session_remaining, a.session_will_exceed,
-                              a.session_resets_at, a.session_period_start, 5),
-                        meter(capitalize(a.model_name) || 'Model', a.model_remaining,
-                              a.model_will_exceed, a.model_resets_at,
-                              a.model_period_start, 168));
-                    bar.appendChild(btn);
-                }
+                section.hidden = accounts.length <= 1;
+                bar.hidden = activeAccounts.length === 0;
+                bar.replaceChildren(...activeAccounts.map(accountCard));
+                renderDisabledAccounts();
             } catch (error) {
                 console.warn('Account bar load failed:', error);
             }
@@ -266,6 +258,87 @@
             localStorage.setItem('account_id', currentAccount);
             loadAccountBar();
             forceRefresh();
+        }
+
+        // One card for every account, active or disabled: same layout, same meters,
+        // same click-to-view. A disabled account simply shows the last readings the
+        // collector took before it was paused — the tooltip dates them.
+        function accountCard(a) {
+            const btn = document.createElement('button');
+            btn.className = 'acc-mini' + (String(a.id) === String(currentAccount) ? ' active' : '');
+            btn.onclick = () => switchAccount(a.id);
+            if (!a.is_active) {
+                const age = formatAgo(a.last_reading_at);
+                btn.title = 'Disabled — no longer polled; these are its last readings'
+                    + (age ? ` (${age})` : ' (none recorded)') + '.';
+            }
+            // Radio-style dot signals these are selectable buttons, not just
+            // meters; the selected account gets a filled accent dot.
+            const label = document.createElement('span');
+            label.className = 'acc-mini-label';
+            const radio = document.createElement('span');
+            radio.className = 'acc-mini-radio';
+            const labelText = document.createElement('span');
+            labelText.textContent = a.label;             // textContent = no HTML injection
+            label.append(radio, labelText);
+            if (a.account_type && a.account_type !== 'unknown') {
+                const type = document.createElement('span');
+                type.className = 'acc-mini-type';
+                type.textContent = a.account_type;
+                label.append(type);
+            }
+            btn.append(label, ...accountMeters(a));
+            return btn;
+        }
+
+        // ---- Disabled accounts ----
+        // Collapsed behind a toggle so the switcher stays about the accounts that
+        // are actually being polled. The choice lives in localStorage so the
+        // heartbeat re-render (loadAccountBar on every refresh) keeps it.
+        let showDisabled = localStorage.getItem('show_disabled') === '1';
+        let activeAccounts = [];
+        let disabledAccounts = [];
+
+        function viewingDisabled() {
+            return disabledAccounts.some(a => String(a.id) === String(currentAccount));
+        }
+
+        function toggleDisabledAccounts() {
+            const collapsing = showDisabled || viewingDisabled();
+            showDisabled = !collapsing;
+            localStorage.setItem('show_disabled', showDisabled ? '1' : '0');
+            if (collapsing && viewingDisabled()) {
+                // Collapsing the panel the dashboard is currently reading from would
+                // strand the selection off-screen, so hand it back to an active
+                // account first (unless there is none — then keep the panel open).
+                const fallback = activeAccounts[0];
+                if (!fallback) {
+                    showDisabled = true;
+                    localStorage.setItem('show_disabled', '1');
+                } else {
+                    switchAccount(fallback.id);          // re-renders and refetches
+                    return;
+                }
+            }
+            renderDisabledAccounts();
+        }
+
+        function renderDisabledAccounts() {
+            const btn = document.getElementById('disabled-toggle');
+            const bar = document.getElementById('account-bar-disabled');
+            bar.replaceChildren();
+            if (!disabledAccounts.length) {
+                btn.hidden = true;
+                bar.hidden = true;
+                return;
+            }
+            // Stay open while a disabled account is the one being viewed.
+            const open = showDisabled || viewingDisabled();
+            btn.hidden = false;
+            btn.textContent = `${open ? 'Hide' : 'Show'} disabled (${disabledAccounts.length})`;
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            bar.hidden = !open;
+            if (open) bar.replaceChildren(...disabledAccounts.map(accountCard));
         }
 
         function accountQuery(prefix) {
@@ -624,7 +697,16 @@
                 const history = await historyRes.json();
 
                 if (!Array.isArray(history) || history.length === 0) {
-                    console.log('No historical data');
+                    // No snapshots in this window — a paused account whose last
+                    // reading predates the range, or a range older than the account.
+                    // Clear the series: leaving the previously selected account's
+                    // curve on screen would attribute its usage to this one.
+                    for (const chart of [chartWeekly, chartSession, chartModel]) {
+                        chart.data.datasets[0].data = [];
+                        chart.data.datasets[1].data = [];
+                        chart.$resetMarkerLines = [];
+                        chart.update();
+                    }
                     return;
                 }
 
@@ -891,6 +973,21 @@
             } else {
                 return `${s}s`;
             }
+        }
+
+        // "3h ago" for a stored UTC timestamp. DB rows are ISO with a space
+        // separator; legacy rows carry no offset at all — both are UTC.
+        function formatAgo(ts) {
+            if (!ts) return null;
+            let s = String(ts).trim().replace(' ', 'T');
+            if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
+            const then = new Date(s).getTime();
+            if (!isFinite(then)) return null;
+            const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+            if (mins < 1) return 'just now';
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            return hrs < 48 ? `${hrs}h ago` : `${Math.floor(hrs / 24)}d ago`;
         }
 
         function getProgressClass(percent) {

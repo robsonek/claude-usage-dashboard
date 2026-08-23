@@ -194,6 +194,17 @@ footer{text-align:center;padding:16px 0 4px;font-family:var(--mono);color:var(--
 .acc-mini-meter .m-val.ok{color:var(--ok)}
 .acc-mini-meter .m-val.warning{color:var(--warn)}
 .acc-mini-meter .m-val.critical{color:var(--crit)}
+/* Disabled accounts: the same selectable cards as the active ones (showing the
+   last readings taken before polling stopped), collapsed behind a toggle and
+   grouped in a dashed panel of their own. */
+.section-label-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.acc-toggle{font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--label);background:none;border:1px solid var(--border);border-radius:6px;padding:3px 9px;cursor:pointer;transition:all .15s}
+.acc-toggle:hover{border-color:var(--accent-border);color:var(--accent)}
+.acc-toggle[hidden]{display:none}
+.account-bar-off{background:none;border:1px dashed var(--border)}
+/* Tighten the gap only when it follows the visible switcher; standing alone
+   (single active account) it keeps the normal label spacing. */
+.account-bar:not([hidden])+.account-bar-off{margin-top:-12px}
 
 /* Accounts page (/accounts) */
 .accounts-page .accounts-panel{background:var(--panel);border-radius:9px;padding:6px 16px;margin-bottom:26px}
