@@ -276,7 +276,7 @@ The account is then polled every 5 minutes. Add as many accounts as you like; th
 account bar on the dashboard switches between them. Multi-account support requires v1.3.0+.
 Disabled accounts are kept out of that bar but stay one click away: the **Show disabled**
 toggle in the bar's header reveals them as ordinary cards, showing the last readings taken
-before polling stopped, and selecting one loads its history into the dashboard (v1.11.0+).
+before polling stopped, and selecting one loads its history into the dashboard (v1.11.3+).
 
 Each account row on the **Accounts** page offers these actions:
 
