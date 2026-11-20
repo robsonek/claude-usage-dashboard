@@ -183,6 +183,7 @@ values (`cp .env.example .env`); the table below documents every variable.
 | SESSION_COOKIE_SECURE | Set to `1` when served over HTTPS (Secure cookie) | 0 |
 | ALLOW_DEFAULT_CREDENTIALS | Set to `1` to allow built-in defaults (local dev only) | unset |
 | TOKEN_ENCRYPTION_KEY | Fernet key encrypting account OAuth tokens at rest — **required to add accounts** (v1.3.0+) | (adding accounts fails without it) |
+| CLAUDE_CLI_VERSION | Claude Code CLI version reported in the `User-Agent` of usage, primer, profile and limit-reset requests. Only needs raising when **Limit resets** stops listing resets because the server rejects the version as too old | 2.1.329 |
 | RETENTION_DAYS | Days of history to keep; older snapshots/quotas, `data/YYYY-MM-DD/` dirs and legacy `data/raw_debug/` files are pruned daily (the dashboard only charts up to 1 month) | 60 |
 
 Generate a secure secret key with:
@@ -286,6 +287,15 @@ Each account row on the **Accounts** page offers these actions:
   work). It first reads the current usage: if a 5-hour window is already active it does
   nothing and just reports the reset time, so it never wastes quota. The message is sent
   with the account's own subscription token — no separate API credits are billed.
+- **Limit resets** (v1.12.0+) — uses one of the account's Anthropic usage-limit resets,
+  the same ones claude.ai lists under *Limit resets*. The button reads what the account
+  has and opens a picker: a **Full reset** refills the 5-hour and weekly limits, a
+  per-model reset (e.g. **Fable reset**) refills the 5-hour limit and that model's
+  allowance and gives back what the model used on the weekly limit, without resetting
+  the whole week. Equivalent resets are shown as one row with a count, and the one that
+  expires first is used. Picking a row opens a confirmation that shows how much of each
+  affected limit is used right now; nothing is spent until you confirm, and a spent
+  reset cannot be taken back. If the account reports no usable reset, nothing is sent.
 - **Refresh session** — re-runs the authorization flow to repair an account whose token
   was revoked (e.g. logout or CLI reinstall). It matches by e-mail, so history is kept.
 - **Enable / Disable** — pause or resume polling for an account without deleting its
@@ -296,6 +306,19 @@ Each account row on the **Accounts** page offers these actions:
 > `User-Agent`; the app already sends the value that works. If a code exchange
 > returns 403/429, wait a few minutes and retry — repeated failed attempts extend
 > a per-IP cooldown.
+
+> **Limit resets and rate limiting.** Anthropic rate-limits the reset status read per
+> account: around ten reads within a quarter of an hour were enough to get one account
+> answered with `429` for a quarter of an hour or more. To stay clear of that, the page
+> reuses a status it read in the last 5 minutes and, after a `429`, stops sending for
+> that account for 5 minutes and tells you so — reloading the page forgets both. Regular
+> polling uses a different `User-Agent` than the reset requests, and the limit was
+> observed to be counted separately for each, so the picker should not block polling.
+>
+> The reset requests identify themselves as a specific Claude Code CLI version, and the
+> server refuses versions it considers too old (the account then shows no resets). If
+> that happens, set `CLAUDE_CLI_VERSION` to a current CLI version
+> (see [Configuration](#configuration)).
 
 Until at least one active account is added, the dashboard shows no usage data.
 
