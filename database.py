@@ -153,6 +153,11 @@ class UsageDatabase:
         if 'needs_reauth' not in acc_cols:
             cursor.execute(
                 "ALTER TABLE accounts ADD COLUMN needs_reauth INTEGER NOT NULL DEFAULT 0")
+        # Rate-limit resets POST to /api/organizations/<uuid>/...; the uuid comes
+        # from the OAuth profile and is backfilled lazily for accounts added
+        # before this column existed.
+        if 'organization_uuid' not in acc_cols:
+            cursor.execute("ALTER TABLE accounts ADD COLUMN organization_uuid TEXT")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_snapshots_account_id ON snapshots(account_id)")
         self.conn.commit()
@@ -619,7 +624,8 @@ class UsageDatabase:
     # ---- accounts ----
 
     def add_or_update_account(self, label, email, account_type,
-                              access_token, refresh_token, expires_at) -> int:
+                              access_token, refresh_token, expires_at,
+                              organization_uuid=None) -> int:
         """Insert a new account or, if one with the same email exists, refresh
         its tokens/label/type. Tokens are stored encrypted. Returns the id."""
         # Lazy import: database.py must import on first deploy before `cryptography`
@@ -637,18 +643,24 @@ class UsageDatabase:
             acc_id = existing['id']
             # A (re-)auth mints a brand-new grant: restart the grant-age clock
             # and clear the invalid_grant failure state so polling resumes.
+            # COALESCE: a re-auth that doesn't know the org uuid must not wipe
+            # a previously stored one.
             cur.execute("""
                 UPDATE accounts SET label=?, account_type=?, access_token=?,
                     refresh_token=?, expires_at=?, is_active=1, last_error=NULL,
-                    authorized_at=?, auth_failures=0, needs_reauth=0
+                    authorized_at=?, auth_failures=0, needs_reauth=0,
+                    organization_uuid=COALESCE(?, organization_uuid)
                 WHERE id=?
-            """, (label, account_type, enc_at, enc_rt, expires_at, now, acc_id))
+            """, (label, account_type, enc_at, enc_rt, expires_at, now,
+                  organization_uuid, acc_id))
         else:
             cur.execute("""
                 INSERT INTO accounts (label, email, account_type, access_token,
-                    refresh_token, expires_at, is_active, created_at, authorized_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-            """, (label, email, account_type, enc_at, enc_rt, expires_at, now, now))
+                    refresh_token, expires_at, is_active, created_at, authorized_at,
+                    organization_uuid)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """, (label, email, account_type, enc_at, enc_rt, expires_at, now, now,
+                  organization_uuid))
             acc_id = cur.lastrowid
         self.conn.commit()
         return acc_id
@@ -710,7 +722,7 @@ class UsageDatabase:
         import crypto_util
         row = self.conn.execute("""
             SELECT id, label, email, account_type, access_token, refresh_token,
-                   expires_at
+                   expires_at, organization_uuid
             FROM accounts WHERE id = ?
         """, (account_id,)).fetchone()
         if row is None:
@@ -719,6 +731,12 @@ class UsageDatabase:
         d['access_token'] = crypto_util.decrypt(d['access_token'])
         d['refresh_token'] = crypto_util.decrypt(d['refresh_token'])
         return d
+
+    def set_account_org_uuid(self, account_id, organization_uuid):
+        """Lazy backfill: store the org uuid learned from a profile fetch."""
+        self.conn.execute("UPDATE accounts SET organization_uuid=? WHERE id=?",
+                          (organization_uuid, account_id))
+        self.conn.commit()
 
     def update_account_tokens(self, account_id, access_token, refresh_token, expires_at):
         # Lazy import (see add_or_update_account): keep database.py importable

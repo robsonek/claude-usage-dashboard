@@ -13,6 +13,7 @@ import config
 import oauth_flow
 import api_usage_fetcher as auf
 import primer
+import resetter
 from database import UsageDatabase
 
 app = Flask(__name__)
@@ -521,7 +522,8 @@ def accounts_add():
         acc_id = db.add_or_update_account(
             label=label, email=profile['email'], account_type=profile['account_type'],
             access_token=tokens['access_token'], refresh_token=tokens['refresh_token'],
-            expires_at=tokens['expires_at'])
+            expires_at=tokens['expires_at'],
+            organization_uuid=profile.get('organization_uuid'))
         backfilled = db.backfill_account_by_email(acc_id, profile['email']) \
             if profile['email'] else 0
         session.pop('oauth_verifier', None)
@@ -559,9 +561,54 @@ def accounts_op(account_id, op):
             return jsonify({'error': f'Unexpected error: {type(e).__name__}'}), 500
         return jsonify({'ok': True, 'started': result['started'],
                         'resets_at': result['resets_at']})
+    elif op == 'reset_limit':
+        account = db.get_account_for_primer(account_id)
+        if account is None:
+            return jsonify({'error': 'No such account.'}), 404
+        grant_id = request.form.get('grant_id', '').strip() or None
+        try:
+            result = resetter.reset_account(db, account, grant_id=grant_id)
+        except auf.UsageApiError as e:
+            return jsonify(_reset_api_error('Could not reset the limit', e)), 502
+        except Exception as e:  # noqa: BLE001 — surface a clean 500, never a token
+            return jsonify({'error': f'Unexpected error: {type(e).__name__}'}), 500
+        return jsonify({'ok': True, 'reset': result['reset'],
+                        'result': result['result'],
+                        'next_available_at': result['next_available_at'],
+                        'cleared': result.get('cleared', [])})
     else:
         return jsonify({'error': 'unknown op'}), 400
     return jsonify({'ok': True})
+
+
+def _reset_api_error(prefix, e):
+    """JSON body for a failed reset call. A 429 gets its own wording and a
+    `rate_limited` flag: the reset status read is rate-limited per account, and
+    retrying right away may keep it blocked for longer, so the page stops
+    sending. (The API's Retry-After is no help — it comes back as 0.)"""
+    if getattr(e, 'status', None) == 429:
+        return {'error': 'Anthropic is rate-limiting usage requests for this account. '
+                         'Wait a few minutes before trying again.',
+                'rate_limited': True}
+    return {'error': f'{prefix}: {e}'}
+
+
+@app.route('/accounts/<int:account_id>/reset_status')
+@login_required
+def account_reset_status(account_id):
+    """On-demand juniper_tide status (never polled on the collector cadence —
+    at_wall=1 is sent only when a user is looking, matching the CLI)."""
+    db = get_db()
+    account = db.get_account_for_primer(account_id)
+    if account is None:
+        return jsonify({'error': 'No such account.'}), 404
+    try:
+        status = resetter.get_reset_status(db, account)
+    except auf.UsageApiError as e:
+        return jsonify(_reset_api_error('Could not read reset status', e)), 502
+    except Exception as e:  # noqa: BLE001 — surface a clean 500, never a token
+        return jsonify({'error': f'Unexpected error: {type(e).__name__}'}), 500
+    return jsonify({'status': status})
 
 
 @app.route('/api/current')

@@ -123,4 +123,8 @@ def fetch_profile(access_token: str) -> dict:
         org_type = org.get('organization_type') or ''
         account_type = (org_type[len('claude_'):] if org_type.startswith('claude_')
                         else org_type) or 'unknown'
-    return {'email': account.get('email'), 'account_type': account_type}
+    # organization.uuid feeds the rate-limit reset claim URL
+    # (/api/organizations/<uuid>/reset_rate_limits); None when absent.
+    org_uuid = org.get('uuid')
+    return {'email': account.get('email'), 'account_type': account_type,
+            'organization_uuid': org_uuid if isinstance(org_uuid, str) else None}

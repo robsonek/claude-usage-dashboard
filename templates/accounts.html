@@ -47,6 +47,7 @@
             <span class="acc-actions">
                 {% if a.is_active %}
                 <button class="primer" onclick="startSession({{ a.id }})">Start 5h</button>
+                <button class="primer" onclick="resetLimit({{ a.id }})">Limit resets</button>
                 {% endif %}
                 <button class="reauth" data-email="{{ a.email }}" data-label="{{ a.label }}">Refresh session</button>
                 {% if a.is_active %}
@@ -265,6 +266,83 @@ function promptDialog({title, label = '', value = '', placeholder = '', confirmL
         document.addEventListener('keydown', onKey);
     });
 }
+// Pick-one modal: one button per option, resolves to the chosen option's value,
+// or null on Cancel/Esc/backdrop. Labels are set via textContent (no injection).
+function chooseDialog({title, body = '', options, cancelLabel = 'Cancel'}) {
+    if (document.querySelector('.modal-backdrop')) return Promise.resolve(null);
+    return new Promise(resolve => {
+        const trigger = document.activeElement;
+        const main = document.querySelector('.dashboard');
+        const uid = `modal-${++_modalUid}`;
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML = `
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="${uid}-title" aria-describedby="${uid}-body">
+                <h3 id="${uid}-title"></h3>
+                <p id="${uid}-body"></p>
+                <div class="modal-choices"></div>
+                <div class="modal-actions">
+                    <button type="button" class="modal-btn-cancel"></button>
+                </div>
+            </div>`;
+        backdrop.querySelector(`#${uid}-title`).textContent = title;
+        const bodyEl = backdrop.querySelector(`#${uid}-body`);
+        bodyEl.textContent = body;
+        if (!body) bodyEl.hidden = true;
+        const list = backdrop.querySelector('.modal-choices');
+        const buttons = options.map(o => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'modal-choice';
+            if (o.title) b.title = o.title;
+            const name = document.createElement('strong');
+            name.textContent = o.label;
+            b.appendChild(name);
+            // detail: one string or a list of lines, each on its own row.
+            [].concat(o.detail || []).forEach(line => {
+                const d = document.createElement('span');
+                d.className = 'modal-choice-detail';
+                d.textContent = line;
+                b.appendChild(d);
+            });
+            b.addEventListener('click', () => close(o.value));
+            list.appendChild(b);
+            return b;
+        });
+        const cancelBtn = backdrop.querySelector('.modal-btn-cancel');
+        cancelBtn.textContent = cancelLabel;
+        const order = [...buttons, cancelBtn];
+        if (main) main.inert = true;
+        document.body.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add('show'));
+        cancelBtn.focus();                       // safe default: a reset is never one keypress away
+        let done = false;
+        function close(result) {
+            if (done) return;
+            done = true;
+            document.removeEventListener('keydown', onKey);
+            if (main) main.inert = false;
+            backdrop.classList.remove('show');
+            const rm = () => backdrop.remove();
+            backdrop.addEventListener('transitionend', rm, {once: true});
+            setTimeout(rm, 300);
+            if (trigger && trigger.focus) trigger.focus();
+            resolve(result);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); close(null); }
+            else if (e.key === 'Tab') {
+                e.preventDefault();
+                const i = order.indexOf(document.activeElement);
+                const next = e.shiftKey ? (i <= 0 ? order.length - 1 : i - 1) : (i === order.length - 1 ? 0 : i + 1);
+                order[next].focus();
+            }
+        }
+        cancelBtn.addEventListener('click', () => close(null));
+        backdrop.addEventListener('click', e => { if (e.target === backdrop) close(null); });
+        document.addEventListener('keydown', onKey);
+    });
+}
 async function startOAuth(hint) {
     const r = await fetch('/accounts/add', {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -346,6 +424,198 @@ async function startSession(id) {
         else showToast(reset
             ? `Window already active — resets at ${reset}.`
             : 'Window already active.', 'info');
+    } catch (e) {
+        showToast('Error: ' + e, 'err');
+    }
+}
+// Reset grants that do the same thing (same cleared windows, same weekly
+// give-back) collapse into one choice, the way claude.ai shows "Fable reset · 2".
+// The server gives each grant its own long label and the same type, so neither
+// can be the grouping key. Each group claims the member that expires first, so
+// the longer-lived ones are kept for later.
+function groupResetGrants(grants) {
+    const groups = new Map();
+    for (const g of grants) {
+        const key = JSON.stringify([[...g.clears].sort(), g.gives_back_weekly]);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(g);
+    }
+    const endMs = g => {
+        const t = g.ends_at ? Date.parse(g.ends_at) : NaN;
+        return Number.isNaN(t) ? Infinity : t;
+    };
+    return [...groups.values()].map(members => {
+        members.sort((a, b) => { const x = endMs(a), y = endMs(b); return x < y ? -1 : x > y ? 1 : 0; });
+        return {
+            grant: members[0],
+            labels: members.map(g => g.label),
+            left: members.reduce((n, g) => n + g.resets_left, 0),
+            total: members.reduce((n, g) => n + (g.resets_total || g.resets_left), 0),
+            sameExpiry: members.every(g => g.ends_at === members[0].ends_at),
+        };
+    });
+}
+const _resetStatusCache = new Map();          // account id → {at, status}
+const RESET_STATUS_TTL_MS = 5 * 60 * 1000;
+// After a 429 the page stops sending for that account: every further click
+// would be one more request against a limit that is already tripped.
+const _resetBlockedUntil = new Map();         // account id → epoch ms
+const RESET_BLOCK_MS = 5 * 60 * 1000;
+function noteResetRateLimit(id, d) {
+    if (d && d.rate_limited) _resetBlockedUntil.set(id, Date.now() + RESET_BLOCK_MS);
+}
+// Reset the account's rate limit (Anthropic's limited "restart"). Status is read
+// first so the confirm dialog shows real availability — and because resets are a
+// limited resource, an unavailable one is never claimed from a stale button.
+async function resetLimit(id) {
+    // Every status read is a real usage request for that account, and the usage
+    // endpoint is rate-limited per account (a 429 there also blocks the
+    // collector's polling). Opening and cancelling the picker repeatedly must
+    // not cost a request each time, so a recent status is reused.
+    const blockedMs = (_resetBlockedUntil.get(id) || 0) - Date.now();
+    if (blockedMs > 0) {
+        showToast(`Anthropic is rate-limiting this account — try again in about ${Math.ceil(blockedMs / 60000)} min. Nothing was sent.`, 'info');
+        return;
+    }
+    let st;
+    const cached = _resetStatusCache.get(id);
+    if (cached && Date.now() - cached.at < RESET_STATUS_TTL_MS) {
+        st = cached.status;
+    } else {
+        const checking = showToast('Checking reset availability…', 'load', {sticky: true});
+        try {
+            const r = await fetch(`/accounts/${id}/reset_status`);
+            const d = await r.json();
+            if (!r.ok) { noteResetRateLimit(id, d); showToast(d.error || `Error ${r.status}`, 'err'); return; }
+            st = d.status;
+            _resetStatusCache.set(id, {at: Date.now(), status: st});
+        } catch (e) { showToast('Error: ' + e, 'err'); return; }
+        // Close the sticky spinner before any dialog: a Cancel/Esc there returns early.
+        dismissToast(checking);
+    }
+    const fmtWhen = iso => iso
+        ? new Date(iso).toLocaleString([], {weekday: 'short', hour: '2-digit', minute: '2-digit'})
+        : null;
+    // Grant expiry with the time of day: on the last day the hour decides.
+    // The year is shown only when it is not the current one.
+    const fmtExpiry = iso => {
+        const d = iso ? new Date(iso) : null;
+        if (!d || Number.isNaN(d.getTime())) return null;
+        const opts = {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'};
+        if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+        return d.toLocaleString([], opts);
+    };
+    // The model behind the per-model weekly limit (e.g. "Fable"); grants only
+    // list the windows they clear, so the name comes from the usage limits.
+    const model = (st && st.scoped_model) || null;
+    const WINDOW_NAMES = {five_hour: '5h', seven_day: 'weekly',
+                          seven_day_overage_included: model || 'model'};
+    const fmtClears = cl => (cl || []).map(c => WINDOW_NAMES[c] || c).join(' + ');
+    // Short name for a group of grants, from what they clear; the server's own
+    // (long) labels go into the tooltip. Unknown combinations keep the server label.
+    const resetName = g => g.clears.includes('seven_day') ? 'Full reset'
+        : g.clears.includes('seven_day_overage_included') ? `${model || 'Model'} reset`
+        : g.label;
+
+    // cedar_ember = this account's reset grants ("Full reset", per-model resets).
+    const cedar = st && st.cedar;
+    const grants = cedar && cedar.eligible ? cedar.grants : [];
+    const usable = grants.filter(g => g.usable_now && !g.paused && g.resets_left > 0);
+    let grantId = null;
+    if (usable.length) {
+        const groups = groupResetGrants(usable);
+        grantId = await chooseDialog({
+            title: 'Use a limit reset',
+            options: groups.map(({grant: g, labels, left, sameExpiry}) => {
+                const expiry = fmtExpiry(g.ends_at);
+                return {
+                    value: g.id,
+                    label: left > 1 ? `${resetName(g)} · ${left}` : resetName(g),
+                    title: labels.join('\n'),
+                    detail: [
+                        [fmtClears(g.clears) || null, `${left} left`].filter(Boolean).join(' · '),
+                        expiry ? `${sameExpiry ? 'Until' : 'First expires'} ${expiry}` : null,
+                        g.gives_back_weekly ? `Weekly: gives back ${model || 'this model'}'s usage only.`
+                            : g.clears.includes('seven_day') ? 'Refills your 5-hour and weekly limits.' : null,
+                    ].filter(Boolean),
+                };
+            }),
+        });
+        if (!grantId) return;
+        // Second step, same convention as "Start 5h": picking a row never spends
+        // a reset by itself. Shows what the reset would give back right now.
+        const {grant: g, left} = groups.find(x => x.grant.id === grantId);
+        const used = g.clears
+            .filter(c => typeof g.percent_used[c] === 'number')
+            .map(c => `${WINDOW_NAMES[c] || c} ${Math.round(g.percent_used[c])}%`).join(' · ');
+        // The picker's backdrop is still fading out, and confirmDialog refuses to
+        // stack on an open one — wait until it is gone.
+        await new Promise(done => {
+            const poll = () => document.querySelector('.modal-backdrop') ? setTimeout(poll, 30) : done();
+            poll();
+        });
+        const pending = confirmDialog({
+            title: `Use ${resetName(g)}?`,
+            // Three short lines (the dialog body keeps line breaks): what is
+            // used now, a blank line, then what the click costs.
+            body: [
+                used ? `Used now: ${used}` : null,
+                used ? '' : null,
+                `${left > 1 ? `${left - 1} more left after this.` : 'This is your last one.'} Cannot be undone.`,
+            ].filter(l => l !== null).join('\n'),
+            confirmLabel: 'Use reset', cancelLabel: 'Cancel'
+        });
+        // Line breaks for this one dialog only — the shared dialog code and its
+        // stylesheet rule stay as they are.
+        const bodyEl = document.querySelector('.modal-backdrop .modal p');
+        if (bodyEl) bodyEl.style.whiteSpace = 'pre-line';
+        if (!await pending) return;
+    } else if (grants.length) {
+        showToast(`${grants.length} reset(s) on this account, but none can be used right now.`, 'info');
+        return;
+    } else {
+        const jt = st && st.juniper;
+        if (jt && !jt.available) {
+            const when = fmtWhen(jt.next_available_at);
+            showToast(jt.eligible
+                ? (when ? `No reset available right now — next one ${when}.`
+                        : 'No reset available right now.')
+                : 'This account is not eligible for limit resets.', 'info');
+            return;
+        }
+        // Nothing reported at all: there is no reset to use, so nothing is sent —
+        // a blind claim would only be refused.
+        if (!jt) {
+            const why = cedar && cedar.ineligible_reason ? ` (${cedar.ineligible_reason})` : '';
+            showToast(`No limit resets are available for this account${why}.`, 'info');
+            return;
+        }
+        const ok = await confirmDialog({
+            title: 'Use a limit reset?',
+            body: 'Resets this account\'s current usage limit now. Resets are limited — one will be consumed.',
+            confirmLabel: 'Use reset', cancelLabel: 'Cancel'
+        });
+        if (!ok) return;
+    }
+    showToast('Resetting limit…', 'load', {sticky: true});
+    _resetStatusCache.delete(id);             // whatever happens next, the status is stale
+    try {
+        const body = grantId ? new URLSearchParams({grant_id: grantId}) : undefined;
+        const r = await fetch(`/accounts/${id}/reset_limit`, {method: 'POST', body});
+        const d = await r.json();
+        if (!r.ok) { noteResetRateLimit(id, d); showToast(d.error || `Error ${r.status}`, 'err'); return; }
+        const next = fmtWhen(d.next_available_at);
+        const cleared = fmtClears(d.cleared);
+        if (d.reset) showToast(cleared
+            ? `Limit reset — cleared ${cleared}.`
+            : (next ? `Limit reset — next reset available ${next}.` : 'Limit reset.'), 'ok');
+        else if (d.result === 'not_limited') showToast('Nothing to reset — this account is not at a limit.', 'info');
+        else if (d.result === 'cooldown') showToast('Reset is cooling down — try again later.', 'info');
+        else if (d.result === 'already_used') showToast(next
+            ? `Reset already used — next one ${next}.`
+            : 'Reset already used.', 'info');
+        else if (d.result === 'ineligible') showToast('Reset refused — this account is not eligible (no reset was consumed).', 'info');
+        else showToast(`Reset not performed (${d.result}).`, 'info');
     } catch (e) {
         showToast('Error: ' + e, 'err');
     }

@@ -79,7 +79,8 @@ def test_fetch_profile_maps_account_type(monkeypatch):
     monkeypatch.setattr(of, '_urlopen', lambda req, timeout=None: FakeResponse(
         {'account': {'email': 'me@x.com', 'has_claude_max': True, 'has_claude_pro': False}}))
     prof = of.fetch_profile('AT')
-    assert prof == {'email': 'me@x.com', 'account_type': 'max'}
+    assert prof == {'email': 'me@x.com', 'account_type': 'max',
+                    'organization_uuid': None}
 
 
 def test_fetch_profile_pro_and_unknown(monkeypatch):
