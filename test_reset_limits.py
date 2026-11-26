@@ -886,3 +886,14 @@ def test_existing_requests_keep_their_user_agent_format(monkeypatch):
     assert captured['ua'] == auf.CLI_SURFACE_UA == f'claude-cli/{auf.CLI_VERSION} (external, cli)'
     auf.send_haiku_primer('TOK')
     assert captured['ua'] == f'claude-code/{auf.CLI_VERSION}'
+
+
+def test_reset_limit_ui_says_when_every_reset_is_spent():
+    """Live finding (2026-11-26): the server keeps listing spent grants
+    (resets_left 0) until they expire. The page must say they are used up,
+    not that they cannot be used "right now"."""
+    html = _read('templates/accounts.html')
+    handler = html.split('async function resetLimit(')[1].split('async function delAcc(')[0]
+    assert 'grants.every(g => g.resets_left < 1)' in handler
+    assert 'resets on this account have already been used.' in handler
+    assert 'but none can be used right now.' in handler      # kept for paused / not-yet-usable grants

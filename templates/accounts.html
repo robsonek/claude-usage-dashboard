@@ -571,7 +571,14 @@ async function resetLimit(id) {
         if (bodyEl) bodyEl.style.whiteSpace = 'pre-line';
         if (!await pending) return;
     } else if (grants.length) {
-        showToast(`${grants.length} reset(s) on this account, but none can be used right now.`, 'info');
+        // The server keeps listing a grant until it expires, even once it is
+        // spent — say so, instead of implying it will come back.
+        const spent = grants.every(g => g.resets_left < 1);
+        showToast(spent
+            ? (grants.length === 1
+                ? 'The only reset on this account has already been used.'
+                : `All ${grants.length} resets on this account have already been used.`)
+            : `${grants.length} reset(s) on this account, but none can be used right now.`, 'info');
         return;
     } else {
         const jt = st && st.juniper;
